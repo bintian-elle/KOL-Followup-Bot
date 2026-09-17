@@ -555,9 +555,7 @@ class SlackNotifier:
         )
         if self.bot_token:
             channel = ""
-            if self.testing_channel_id:
-                channel = self.testing_channel_id
-            elif self.override_user_id:
+            if self.override_user_id:
                 channel = self._dm_channel(self.override_user_id)
             elif owner.slack_channel_id:
                 channel = owner.slack_channel_id
@@ -589,9 +587,7 @@ class SlackNotifier:
             response = requests.post(self.webhook_url, json={"text": text}, timeout=20)
             response.raise_for_status()
             return ""
-        if self.testing_channel_id:
-            channel = self.testing_channel_id
-        elif self.override_user_id:
+        if self.override_user_id:
             channel = self._dm_channel(self.override_user_id)
         else:
             channel = self._dm_channel(destination) if direct_message else destination

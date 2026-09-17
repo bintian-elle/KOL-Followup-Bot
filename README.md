@@ -12,9 +12,9 @@ Slack has two independent notification flows:
   roll into the next working-day summary. `pilot_mode` controls this summary
   destination; it does not suppress owner task notifications.
 
-During testing, the active `Testing Channel` row in Sheet Config routes both
-flows exclusively to that channel. Developer DM environment overrides are ignored.
-When the testing row is inactive, normal owner/digest routing resumes.
+The active `Testing Channel` row in Sheet Config mirrors both flows to that
+channel in addition to normal owner/digest delivery. Developer DM environment
+overrides are ignored. An inactive testing row disables only the extra copy.
 The Queue still records the actual owner.
 Use `--force-digest` to send the current daily summary immediately even when
 today's digest has already been recorded.

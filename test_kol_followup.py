@@ -36,6 +36,35 @@ def message(mid, date, sender, labels, subject="Hello", message_id=None, in_repl
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_testing_channel_copies_without_replacing_owner_dm(self):
+        from kol_followup import Reply
+        notifier = SlackNotifier('token', testing_channel_id='Ctest')
+        reply = Reply('m1', 't1', 'Creator', 'creator@example.com', 'Bluevua', '')
+        with patch.object(notifier, '_dm_channel', return_value='Downer') as dm, \
+             patch('kol_followup.requests.post') as post:
+            post.return_value.json.return_value = {'ok': True, 'ts': '123'}
+            notifier.send(Owner('A', 'U1'), reply, 'owner-task:1')
+        dm.assert_called_once_with('U1')
+        self.assertEqual([c.kwargs['json']['channel'] for c in post.call_args_list], ['Downer', 'Ctest'])
+
+    def test_testing_channel_copies_without_replacing_digest(self):
+        notifier = SlackNotifier('token', testing_channel_id='Ctest')
+        with patch.object(notifier, '_dm_channel', return_value='Dcandice'), \
+             patch('kol_followup.requests.post') as post:
+            post.return_value.json.return_value = {'ok': True, 'ts': '123'}
+            notifier.send_digest('Ucandice', 'digest', 'daily-digest:1', True)
+        self.assertEqual([c.kwargs['json']['channel'] for c in post.call_args_list], ['Dcandice', 'Ctest'])
+
+    def test_inactive_testing_channel_leaves_owner_dm(self):
+        from kol_followup import Reply
+        notifier = SlackNotifier('token')
+        with patch.object(notifier, '_dm_channel', return_value='Downer'), \
+             patch('kol_followup.requests.post') as post:
+            post.return_value.json.return_value = {'ok': True, 'ts': '123'}
+            notifier.send(Owner('A', 'U1'), Reply('m', 't', 'K', 'k@example.com', 'Bluevua', ''), 'task')
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(post.call_args.kwargs['json']['channel'], 'Downer')
+
     def test_owner_totals_only_count_assigned_and_latest_date(self):
         from kol_followup import owner_assignment_totals
         rows = []
