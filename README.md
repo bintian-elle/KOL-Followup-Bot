@@ -33,9 +33,9 @@ today's digest has already been recorded.
   `gmail_include_inbound_initiated` is enabled, an externally initiated Gmail
   conversation can continue to the separate Bluevua relevance classifier
   without an outbound anchor.
-- `Dedup Key` (`gmail_message:<id>`) prevents duplicates while allowing a
-  thread to reactivate after a team reply. Reactivation keeps the prior active
-  owner by default.
+- `Dedup Key` (`gmail_message:<id>`) prevents duplicate initial assignments.
+  Later conversation replies never generate Reactivated tasks. Production
+  scans always enforce the first-outreach rule regardless of first_email_only.
 - Assignment continues from `last_round_robin_owner` in Config.
 - Assigned rows record notification state and any Slack error in the Queue.
 - Plain-text and HTML-only email bodies are parsed; attachments remain ignored.

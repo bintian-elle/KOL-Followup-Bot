@@ -221,7 +221,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(has_profile_and_audience_evidence(reply))
         self.assertFalse(classify_reply(reply, {"gmail_ugc_outreach_action": "Ignore"})[0])
 
-    def test_reactivation_after_team_reply(self):
+    def test_later_reply_after_team_answer_is_excluded(self):
         thread = {"id": "t1", "messages": [
             message("initial", 1, "Me <me@example.com>", ["SENT"], message_id="<initial@example.com>"),
             message("first_reply", 2, "KOL <kol@example.com>", ["INBOX"], in_reply_to="<initial@example.com>"),
@@ -229,8 +229,7 @@ class WorkflowTests(unittest.TestCase):
             message("new_reply", 4, "KOL <kol@example.com>", ["INBOX"], in_reply_to="<answer@example.com>"),
         ]}
         events = eligible_gmail_events(thread, "me@example.com")
-        self.assertEqual([e.message_id for e in events], ["first_reply", "new_reply"])
-        self.assertEqual(events[1].threading_status, "reactivated")
+        self.assertEqual([e.message_id for e in events], ["first_reply"])
 
     def test_other_brand_reactivation_remains_ignored(self):
         reply = first_eligible_gmail_message({"id": "t1", "messages": [

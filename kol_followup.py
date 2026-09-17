@@ -284,7 +284,7 @@ def _reply_from_message(
 def eligible_gmail_events(
     thread: Mapping[str, Any], mailbox: str, first_email_only: bool = True
 ) -> List[Reply]:
-    """Return the initial qualifying event plus later reply-after-team events."""
+    """Return only the initial qualifying event, never subsequent conversations."""
     mailbox = mailbox.lower()
     messages = sorted(thread.get("messages", []), key=timestamp)
     external: Dict[int, tuple[str, str]] = {}
@@ -343,18 +343,6 @@ def eligible_gmail_events(
     if base_index is None:
         return events
 
-    # After the initial event, each team SENT message can arm one reactivation.
-    waiting_for_external = False
-    for index in range(base_index + 1, len(messages)):
-        message = messages[index]
-        if "SENT" in message.get("labelIds", []):
-            waiting_for_external = True
-            continue
-        if index in external and waiting_for_external:
-            events.append(_reply_from_message(
-                message, str(thread["id"]), outreach_id, "reactivated"
-            ))
-            waiting_for_external = False
     return events
 
 
@@ -1250,7 +1238,7 @@ def run(dry_run: bool, force_digest: bool = False) -> int:
     if config_bool(settings, "gmail_scan_enabled", True):
         query = gmail_query(settings)
         replies = sorted(
-            gmail.replies(query, config_bool(settings, "first_email_only", True)),
+            gmail.replies(query, True),
             key=lambda item: item.reply_date,
         )
     message_i = QUEUE_HEADERS.index("Gmail Message ID")
@@ -1285,20 +1273,10 @@ def run(dry_run: bool, force_digest: bool = False) -> int:
             continue
         assigned, classification, reason = classify_reply(reply, settings)
         prior = latest_by_thread.get(reply.thread_id)
-        event = (
-            "REACTIVATED"
-            if assigned and reply.threading_status == "reactivated" and prior
-            else ("ASSIGNED" if assigned else "IGNORED")
-        )
-        previous_owner = prior[owner_i] if prior else ""
-        if (
-            assigned and event == "REACTIVATED" and previous_owner in active_owner_names
-            and config_bool(settings, "reactivation_keep_owner", True)
-        ):
-            owner = next(item for item in owners if item.name == previous_owner)
-        else:
-            owner = next_config_owner(owners, last_owner) if assigned else None
-        if owner and event != "REACTIVATED":
+        event = "ASSIGNED" if assigned else "IGNORED"
+        previous_owner = ""
+        owner = next_config_owner(owners, last_owner) if assigned else None
+        if owner:
             last_owner = owner.name
         assignment_id = next_assignment_id(
             queue + [[row[2]] for row in audit if len(row) > 2], assigned, now
