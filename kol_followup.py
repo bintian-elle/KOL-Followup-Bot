@@ -320,7 +320,9 @@ def eligible_gmail_events(
         outreach_id = str(initial["id"])
         initial_ids = message_id_tokens(header_map(initial).get("message-id", ""))
         initial_rfc_id = initial_ids[0] if initial_ids else ""
-        for index in sorted(i for i in external if i > first_sent_index):
+        # The first human external reply is an irreversible boundary. Never
+        # skip a prior conversation reply to admit a later message as first.
+        for index in sorted(i for i in external if i > first_sent_index)[:1]:
             candidate = messages[index]
             parent_ids = message_id_tokens(header_map(candidate).get("in-reply-to", ""))
             if not first_email_only:
@@ -333,8 +335,8 @@ def eligible_gmail_events(
                 status = "verified_first_email"
                 base_index = index
             else:
-                # A reply to a campaign follow-up is not the first-email event.
-                continue
+                # A first reply to a follow-up excludes this thread entirely.
+                return []
             events.append(_reply_from_message(
                 candidate, str(thread["id"]), outreach_id, status
             ))

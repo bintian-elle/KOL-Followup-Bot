@@ -37,6 +37,13 @@ today's digest has already been recorded.
   Later conversation replies never generate Reactivated tasks. Production
   scans always enforce the first-outreach rule regardless of first_email_only.
 - Assignment continues from `last_round_robin_owner` in Config.
+- First reply is a hard history boundary: only the earliest human external
+  reply after initial outreach is considered, including history before the
+  polling checkpoint/cutoff. If it replies to a follow-up, the thread is
+  excluded; later replies cannot qualify even if they reference the initial
+  invitation. Missing headers on the first reply remain Needs Review, never
+  permitting a later message to replace it. Queue absence does not imply a
+  new conversation. Inbound-initiated handling remains separately configured.
 - Assigned rows record notification state and any Slack error in the Queue.
 - Plain-text and HTML-only email bodies are parsed; attachments remain ignored.
 - Every candidate is checked against `reply_cutoff_date`, not only the query.

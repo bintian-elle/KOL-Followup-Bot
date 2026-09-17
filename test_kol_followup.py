@@ -36,6 +36,35 @@ def message(mid, date, sender, labels, subject="Hello", message_id=None, in_repl
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_prior_followup_reply_blocks_later_reply_to_initial(self):
+        thread = {'id': 't1', 'messages': [
+            message('initial', 1, 'Me <me@example.com>', ['SENT'], message_id='<initial>'),
+            message('followup', 2, 'Me <me@example.com>', ['SENT'], message_id='<followup>'),
+            message('prior', 3, 'KOL <kol@example.com>', ['INBOX'], in_reply_to='<followup>'),
+            message('later', 4, 'KOL <kol@example.com>', ['INBOX'], in_reply_to='<initial>'),
+        ]}
+        self.assertEqual(eligible_gmail_events(thread, 'me@example.com', True), [])
+
+    def test_prior_first_reply_blocks_all_later_conversation_messages(self):
+        thread = {'id': 't1', 'messages': [
+            message('initial', 1, 'Me <me@example.com>', ['SENT'], message_id='<initial>'),
+            message('prior', 2, 'KOL <kol@example.com>', ['INBOX'], in_reply_to='<initial>'),
+            message('answer', 3, 'Me <me@example.com>', ['SENT'], message_id='<answer>'),
+            message('later', 4, 'KOL <kol@example.com>', ['INBOX'], in_reply_to='<answer>'),
+            message('later2', 5, 'KOL <kol@example.com>', ['INBOX'], in_reply_to='<initial>'),
+        ]}
+        self.assertEqual([r.message_id for r in eligible_gmail_events(thread, 'me@example.com')], ['prior'])
+
+    def test_missing_headers_first_reply_does_not_admit_later_verified_reply(self):
+        thread = {'id': 't1', 'messages': [
+            message('initial', 1, 'Me <me@example.com>', ['SENT'], message_id='<initial>'),
+            message('prior', 2, 'KOL <kol@example.com>', ['INBOX']),
+            message('later', 3, 'KOL <kol@example.com>', ['INBOX'], in_reply_to='<initial>'),
+        ]}
+        events = eligible_gmail_events(thread, 'me@example.com')
+        self.assertEqual([r.message_id for r in events], ['prior'])
+        self.assertEqual(events[0].threading_status, 'missing_threading_headers')
+
     def test_testing_channel_copies_without_replacing_owner_dm(self):
         from kol_followup import Reply
         notifier = SlackNotifier('token', testing_channel_id='Ctest')
