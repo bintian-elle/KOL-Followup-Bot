@@ -1,0 +1,10 @@
+.env
+backups/
+gmail-oauth-credential.json
+*service-account*.json
+credentials/
+.kol-followup.lock
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
