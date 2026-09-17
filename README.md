@@ -70,7 +70,28 @@ today's digest has already been recorded.
    ```
 
 6. After reviewing dry-run output, set `DRY_RUN=false` and run again. On EC2,
-   schedule the same command every 5 minutes with cron or a systemd timer.
+   use the continuous monitor below; no cron or systemd timer is needed.
+
+## Continuous EC2 monitor
+
+Run `.venv/bin/python kol_followup.py --monitor` to scan immediately, then wait
+300 seconds after each completed or failed scan. Scans never overlap. Sheet
+Config is reloaded every cycle; failures are logged and retried next cycle.
+SIGTERM/SIGINT finish the current scan and exit, or wake the idle wait immediately.
+Single-run commands and `--dry-run` remain supported. Do not use `--force-digest`
+in monitor mode. Only one machine should monitor this mailbox.
+
+For Ubuntu deployed at `/home/ubuntu/KOL-Followup-Bot`, install the included service:
+
+```bash
+sudo cp deploy/kol-followup.service /etc/systemd/system/kol-followup.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now kol-followup.service
+sudo journalctl -u kol-followup.service -f
+```
+
+Adjust User and paths for other EC2 login users. Disable any old timer before
+enabling this service. Stop monitoring with `sudo systemctl stop kol-followup.service`.
 
 ## Sheet contract
 

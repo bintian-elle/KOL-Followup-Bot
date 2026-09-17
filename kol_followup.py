@@ -15,6 +15,8 @@ import json
 import logging
 import os
 import re
+import signal
+import threading
 import time as time_module
 import uuid
 from dataclasses import dataclass
@@ -1408,17 +1410,48 @@ def single_instance_lock() -> Iterable[None]:
         handle.close()
 
 
+def monitor(dry_run: bool, interval_seconds: int, stop: threading.Event) -> None:
+    """Run sequential scans until shutdown, retaining the process lock outside."""
+    while not stop.is_set():
+        try:
+            count = run(dry_run)
+            LOG.info("Scan completed; %d new event(s)", count)
+        except Exception:
+            LOG.exception("Scan failed; will retry after %d seconds", interval_seconds)
+        if not stop.is_set():
+            LOG.info("Next scan in %d seconds", interval_seconds)
+            stop.wait(interval_seconds)
+
+
 def main() -> None:
     load_dotenv()
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Never write Sheet or Slack")
+    parser.add_argument("--monitor", action="store_true", help="Run continuously")
+    parser.add_argument("--interval-seconds", type=int, default=300,
+                        help="Wait between completed scans in monitor mode (default 300)")
     parser.add_argument(
         "--force-digest", action="store_true",
         help="Send today's daily digest even if it was already recorded as sent",
     )
     args = parser.parse_args()
+    if args.interval_seconds <= 0:
+        parser.error("--interval-seconds must be positive")
+    if args.monitor and args.force_digest:
+        parser.error("--force-digest is only supported for a single run")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     env_dry_run = os.getenv("DRY_RUN", "true").lower() in {"1", "true", "yes"}
+    if args.monitor:
+        stop = threading.Event()
+        def shutdown(signum, frame):
+            LOG.info("Shutdown requested; finish the current scan before exiting")
+            stop.set()
+        signal.signal(signal.SIGTERM, shutdown)
+        signal.signal(signal.SIGINT, shutdown)
+        with single_instance_lock():
+            monitor(args.dry_run or env_dry_run, args.interval_seconds, stop)
+        LOG.info("Monitor stopped")
+        return
     with single_instance_lock():
         count = run(args.dry_run or env_dry_run, force_digest=args.force_digest)
     LOG.info("Done; %d item(s) %s", count, "inspected" if args.dry_run or env_dry_run else "notified")

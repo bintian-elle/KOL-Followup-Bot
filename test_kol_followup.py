@@ -1,5 +1,7 @@
 import unittest
 import base64
+import threading
+from unittest.mock import patch
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -34,6 +36,28 @@ def message(mid, date, sender, labels, subject="Hello", message_id=None, in_repl
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_monitor_scans_immediately_and_waits_after_failure(self):
+        from kol_followup import monitor
+        stop = threading.Event()
+        waits = []
+        def wait(seconds):
+            waits.append(seconds)
+            if len(waits) == 2:
+                stop.set()
+        with patch('kol_followup.run', side_effect=[RuntimeError('offline'), 0]) as run_mock, \
+             patch.object(stop, 'wait', side_effect=wait), patch('kol_followup.LOG'):
+            monitor(False, 300, stop)
+        self.assertEqual(run_mock.call_count, 2)
+        self.assertEqual(waits, [300, 300])
+
+    def test_monitor_does_not_scan_when_stopped(self):
+        from kol_followup import monitor
+        stop = threading.Event()
+        stop.set()
+        with patch('kol_followup.run') as run_mock:
+            monitor(False, 300, stop)
+        run_mock.assert_not_called()
+
     def setUp(self):
         self.owners = [Owner("A", "U1"), Owner("B", "U2"), Owner("C", "U3")]
 

@@ -1,4 +1,5 @@
 .env
+.DS_Store
 backups/
 gmail-oauth-credential.json
 *service-account*.json
