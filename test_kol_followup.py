@@ -36,6 +36,18 @@ def message(mid, date, sender, labels, subject="Hello", message_id=None, in_repl
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_owner_totals_only_count_assigned_and_latest_date(self):
+        from kol_followup import owner_assignment_totals
+        rows = []
+        for owner, status, date in [('A', 'Assigned', '12/31/2025 10:00'),
+                                    ('A', 'Assigned', '01/01/2026 09:00'),
+                                    ('A', 'Reactivated', '09/17/2026 10:00'),
+                                    ('B', 'Ignored', '')]:
+            row = [''] * len(QUEUE_HEADERS)
+            row[7], row[8], row[9] = owner, status, date
+            rows.append(row)
+        self.assertEqual(owner_assignment_totals(rows), {'A': (2, '01/01/2026 09:00')})
+
     def test_monitor_scans_immediately_and_waits_after_failure(self):
         from kol_followup import monitor
         stop = threading.Event()

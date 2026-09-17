@@ -809,6 +809,22 @@ class OperationalSheetStore:
     def append_audit(self, values: Sequence[str]) -> None:
         self.append("'KOL Followup Audit Log'!A:L", values)
 
+    def refresh_owner_totals(self) -> None:
+        """Reconcile owner counters from durable Assigned Queue records."""
+        config_rows = self.values("'KOL Followup Config'!A6:F13")
+        totals = owner_assignment_totals(self.queue_rows())
+        updates = []
+        for number, row in enumerate(config_rows, start=6):
+            if len(row) > 1 and row[1].isdigit():
+                count, latest = totals.get(row[0].strip(), (0, ""))
+                updates.append({"range": f"'KOL Followup Config'!E{number}:F{number}",
+                                "values": [[count, latest]]})
+        if updates:
+            self._write(self.api.spreadsheets().values().batchUpdate(
+                spreadsheetId=self.sheet_id,
+                body={"valueInputOption": "RAW", "data": updates},
+            ))
+
     def sort_newest_first(self) -> None:
         metadata = self.api.spreadsheets().get(
             spreadsheetId=self.sheet_id, fields="sheets(properties)"
@@ -945,6 +961,29 @@ def classify_reply(reply: Reply, settings: Mapping[str, str]) -> tuple[bool, str
         if any(item in subject for item in plausible):
             return True, "Needs Review", "No explicit Bluevua reference"
     return False, "", "Unrelated"
+
+
+def owner_assignment_totals(rows: Sequence[Sequence[str]]) -> Dict[str, tuple[int, str]]:
+    totals: Dict[str, tuple[int, str]] = {}
+    owner_i = QUEUE_HEADERS.index("Assigned Owner")
+    status_i = QUEUE_HEADERS.index("Assignment Status")
+    date_i = QUEUE_HEADERS.index("Assigned At")
+    for raw in rows:
+        row = list(raw) + [""] * max(0, len(QUEUE_HEADERS) - len(raw))
+        if row[status_i] != "Assigned" or not row[owner_i]:
+            continue
+        owner = row[owner_i]
+        count, latest = totals.get(owner, (0, ""))
+        value = row[date_i]
+        def parsed(text):
+            try:
+                return datetime.strptime(text, "%m/%d/%Y %H:%M")
+            except ValueError:
+                return datetime.min
+        if parsed(value) > parsed(latest):
+            latest = value
+        totals[owner] = (count + 1, latest)
+    return totals
 
 
 def next_config_owner(owners: Sequence[Owner], last_owner: str) -> Owner:
@@ -1387,6 +1426,7 @@ def run(dry_run: bool, force_digest: bool = False) -> int:
             store, store.queue_rows(), settings, setting_rows, notifier, now,
             force=force_digest,
         )
+    store.refresh_owner_totals()
     store.sort_newest_first()
     return len(planned)
 
