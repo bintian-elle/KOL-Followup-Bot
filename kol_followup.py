@@ -809,6 +809,34 @@ class OperationalSheetStore:
                 body={"valueInputOption": "RAW", "data": updates},
             ))
 
+    def prune_audit(self, now: datetime) -> None:
+        # Three calendar months, preserving headers and every Queue record.
+        month_index = now.year * 12 + now.month - 1 - 3
+        year, month_zero = divmod(month_index, 12)
+        month = month_zero + 1
+        cutoff = now.replace(year=year, month=month,
+                             day=min(now.day, calendar.monthrange(year, month)[1]))
+        rows = self.audit_rows()
+        old = []
+        for number, row in enumerate(rows, 6):
+            try:
+                stamp = datetime.strptime(row[0], "%m/%d/%Y %H:%M").replace(tzinfo=now.tzinfo)
+            except (ValueError, IndexError):
+                continue
+            if stamp < cutoff:
+                old.append(number)
+        if not old:
+            return
+        meta = self.api.spreadsheets().get(spreadsheetId=self.sheet_id,
+                                          fields="sheets(properties)").execute()
+        sheet_id = next(sh['properties']['sheetId'] for sh in meta['sheets']
+                        if sh['properties']['title'] == 'KOL Followup Audit Log')
+        self._write(self.api.spreadsheets().batchUpdate(spreadsheetId=self.sheet_id,
+            body={'requests': [{'deleteDimension': {'range': {
+                'sheetId': sheet_id, 'dimension': 'ROWS',
+                'startIndex': n-1, 'endIndex': n}}} for n in reversed(old)]}))
+        LOG.info("Pruned %d Audit rows older than three months", len(old))
+
     def sort_newest_first(self) -> None:
         metadata = self.api.spreadsheets().get(
             spreadsheetId=self.sheet_id, fields="sheets(properties)"
@@ -1195,15 +1223,30 @@ def maybe_send_daily_digest(
             f"KOL Follow-up Daily Digest ({start.strftime('%m/%d')}–{(end - timedelta(days=1)).strftime('%m/%d')})",
             f"Total assigned: {len(selected)}",
         ]
-        for row in selected[:50]:
-            lines.append(f"• {row[id_i]} | {row[owner_i]} | {row[name_i]} | {row[subject_i]}")
-        if len(selected) > 50:
-            lines.append(f"…and {len(selected) - 50} more")
+        for row in selected:
+            email = row[QUEUE_HEADERS.index('Email')]
+            link = row[QUEUE_HEADERS.index('Gmail Thread Link')]
+            lines.append(
+                f"\nOwner: {html.escape(row[owner_i])}\n"
+                f"Email: {html.escape(email)}\n"
+                f"Subject: {html.escape(row[subject_i])}\n"
+                f"Gmail: {link}"
+            )
         pilot = config_bool(settings, "pilot_mode", True)
         destination = settings.get("pilot_recipient_slack_id" if pilot else "production_channel_id", "")
         if not destination:
             raise ValueError("Daily digest Slack destination is missing in Config")
-        notifier.send_digest(destination, "\n".join(lines), digest_key, direct_message=pilot)
+        parts = []
+        current = ""
+        for line in lines:
+            if current and len(current) + len(line) > 12000:
+                parts.append(current)
+                current = ""
+            current += ("\n" if current else "") + line
+        if current:
+            parts.append(current)
+        for number, part in enumerate(parts):
+            notifier.send_digest(destination, part, f"{digest_key}:part:{number}", direct_message=pilot)
         digest_sent = True
         result, details = "Success", f"Digest sent with {len(selected)} assignment(s)"
     else:
@@ -1401,6 +1444,7 @@ def run(dry_run: bool, force_digest: bool = False) -> int:
             force=force_digest,
         )
     store.refresh_owner_totals()
+    store.prune_audit(now)
     store.sort_newest_first()
     return len(planned)
 
