@@ -19,7 +19,7 @@ import signal
 import threading
 import time as time_module
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from email.utils import getaddresses, parsedate_to_datetime
 from html.parser import HTMLParser
@@ -88,6 +88,7 @@ class Reply:
     body_text: str = ""
     is_spam: bool = False
     threading_status: str = "verified_first_email"
+    original_reply_date: str = ""
 
 
 @dataclass(frozen=True)
@@ -413,7 +414,7 @@ class GmailReader:
                 time_module.sleep(delay)
         raise RuntimeError("Gmail request retry loop ended unexpectedly")
 
-    def replies(self, query: str, first_email_only: bool = True) -> Iterable[Reply]:
+    def replies(self, query: str, first_email_only: bool = True, settings=None) -> Iterable[Reply]:
         page_token: Optional[str] = None
         seen_threads = set()
         interval = max(0.0, float(os.getenv("GMAIL_THREAD_INTERVAL_SECONDS", "2.5")))
@@ -429,7 +430,32 @@ class GmailReader:
                 thread = self._execute(self.api.users().threads().get(
                     userId="me", id=thread_id, format="full"
                 ))
-                for reply in eligible_gmail_events(thread, self.mailbox, first_email_only):
+                from brand_handoffs import thread_events
+                for reply in thread_events(thread, self.mailbox, first_email_only, settings or {}):
+                    if reply.threading_status.startswith("brand_forward") and reply.kol_email:
+                        # Thread bodies alone cannot establish complete history
+                        # when a teammate forwards into a separate Gmail thread.
+                        before = int(datetime.fromisoformat(reply.reply_date).timestamp())
+                        history = self._execute(self.api.users().messages().list(
+                            userId="me", q=f'in:anywhere {{from:{reply.kol_email} to:{reply.kol_email}}} before:{before}',
+                            maxResults=100))
+                        other_threads = {m["threadId"] for m in history.get("messages", []) if m.get("threadId") != reply.thread_id}
+                        handled = False
+                        for historical_id in other_threads:
+                            old = self._execute(self.api.users().threads().get(userId="me", id=historical_id, format="full"))
+                            old_messages = [m for m in old.get("messages", []) if timestamp(m) < before * 1000
+                                            and not set(m.get("labelIds", [])) & {"DRAFT", "TRASH"}]
+                            creator_replies = [m for m in old_messages if any(e == reply.kol_email for _, e in addresses(header_map(m).get("from", "")))
+                                               and not is_automated_message(header_map(m), reply.kol_email)]
+                            if len(creator_replies) > 1 or (creator_replies and any("SENT" in m.get("labelIds", []) for m in old_messages)):
+                                handled = True
+                                break
+                            if interval:
+                                time_module.sleep(interval)
+                        if handled:
+                            continue
+                        if other_threads or history.get("nextPageToken"):
+                            reply = replace(reply, threading_status="brand_forward_needs_review")
                     yield reply
                 if interval:
                     time_module.sleep(interval)
@@ -932,6 +958,12 @@ def classify_reply(reply: Reply, settings: Mapping[str, str]) -> tuple[bool, str
     subject = reply.subject.lower()
     content = f"{reply.subject}\n{reply.body_text}".lower()
     brand = settings.get("campaign_name_contains", "Bluevua").lower()
+    if reply.threading_status == "brand_forward_needs_review":
+        return True, "Needs Review", "Brand handoff: original creator inquiry/history cannot be fully verified; not a confirmed first reach out"
+    if reply.threading_status == "brand_forward_verified":
+        if reply.is_spam:
+            return True, "Needs Review", "New creator inquiry forwarded by Bluevua team; email is in Spam, manual verification required"
+        return True, "Human Reply", "New creator inquiry forwarded by Bluevua team"
     closure_markers = config_list(settings, "completed_collab_keywords", (
         "invoice", "payment request", "payment confirmation", "w-9", "w9",
         "tax form", "collaboration completed", "future collaboration",
@@ -1024,7 +1056,7 @@ def reply_after_cutoff(reply: Reply, settings: Mapping[str, str], tz: ZoneInfo) 
     try:
         cutoff = datetime.strptime(settings.get("reply_cutoff_date", "08/20/2026"), "%m/%d/%Y")
         cutoff = cutoff.replace(tzinfo=tz)
-        received = datetime.fromisoformat(reply.reply_date)
+        received = datetime.fromisoformat(reply.original_reply_date or reply.reply_date)
         if received.tzinfo is None:
             received = received.replace(tzinfo=timezone.utc)
         return received.astimezone(tz) >= cutoff
@@ -1279,7 +1311,7 @@ def run(dry_run: bool, force_digest: bool = False) -> int:
     if config_bool(settings, "gmail_scan_enabled", True):
         query = gmail_query(settings)
         replies = sorted(
-            gmail.replies(query, True),
+            gmail.replies(query, True, settings),
             key=lambda item: item.reply_date,
         )
     message_i = QUEUE_HEADERS.index("Gmail Message ID")
@@ -1314,6 +1346,11 @@ def run(dry_run: bool, force_digest: bool = False) -> int:
             continue
         assigned, classification, reason = classify_reply(reply, settings)
         prior = latest_by_thread.get(reply.thread_id)
+        if reply.threading_status.startswith("brand_forward") and (prior or any(
+            len(r) > 4 and r[4].lower() == reply.kol_email.lower() and reply.kol_email
+            for r in queue
+        )):
+            continue  # A handoff never reopens an already recorded thread.
         event = "ASSIGNED" if assigned else "IGNORED"
         previous_owner = ""
         owner = next_config_owner(owners, last_owner) if assigned else None

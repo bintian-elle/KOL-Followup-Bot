@@ -36,22 +36,187 @@ def message(mid, date, sender, labels, subject="Hello", message_id=None, in_repl
 
 
 class WorkflowTests(unittest.TestCase):
+    def established(self, thread):
+        thread['messages'] = [message('prior-in',10,'KOL <k@example.com>',[]),
+                              message('prior-answer',20,'Me <me@example.com>',['SENT'])] + thread['messages']
+        return thread
+
+    def handoff_settings(self):
+        return {'brand_team_emails':'mel@bluevua.com,jeremy.ku@bluevua.com',
+                'forwarding_mailbox':'partnerships@bluevua.com',
+                'brand_handoff_enabled_at':'1970-01-01T00:00:02+00:00',
+                'generic_collab_keywords':'collab,partnership',
+                'brand_handoff_keywords':'copying my colleagues',
+                'brand_handoff_exclude_keywords':'certification,following up'}
+
+    def test_brand_handoff_new_native_inquiry_has_real_creator(self):
+        from brand_handoffs import thread_events
+        t = {'id':'t','messages':[message('kol',2000,'Grace <grace@example.com>',[],subject='Bluevua partnership'),
+             message('mel',3000,'Mel <mel@bluevua.com>',[],subject='Bluevua partnership')]}
+        r = thread_events(t,'me@example.com',True,self.handoff_settings())[0]
+        self.assertEqual(r.kol_email,'grace@example.com')
+        self.assertEqual(r.threading_status,'brand_forward_verified')
+        self.assertEqual(r.reply_date,'1970-01-01T00:00:03+00:00')
+
+    def test_old_handoff_not_reopened_by_new_brand_reply(self):
+        from brand_handoffs import thread_events
+        t = {'id':'t','messages':[message('old',1000,'Mel <mel@bluevua.com>',[],subject='Bluevua partnership'),
+             message('new',3000,'Mel <mel@bluevua.com>',[],subject='Bluevua partnership')]}
+        self.assertEqual(thread_events(t,'me@example.com',True,self.handoff_settings()),[])
+        self.assertEqual(thread_events(t,'me@example.com',True,{'brand_team_emails':'mel@bluevua.com'}),[])
+
+    def test_brand_followup_and_prior_creator_replies_excluded(self):
+        from brand_handoffs import thread_events
+        t = {'id':'t','messages':[message('new',3000,'Jeremy <jeremy.ku@bluevua.com>',[],subject='Bluevua certification following up')]}
+        self.assertEqual(thread_events(t,'me@example.com',True,self.handoff_settings()),[])
+        t = {'id':'t','messages':[message('a',2000,'KOL <kol@example.com>',[]),
+             message('b',2500,'KOL <kol@example.com>',[]),
+             message('mel',3000,'Mel <mel@bluevua.com>',[],subject='Bluevua partnership')]}
+        self.assertEqual(thread_events(t,'me@example.com',True,self.handoff_settings()),[])
+
+    def test_brand_forward_body_is_review_not_brand_as_creator(self):
+        from brand_handoffs import thread_events
+        m = message('mel',3000,'Mel <mel@bluevua.com>',[],subject='Fwd: Bluevua partnership')
+        m['payload']['mimeType']='text/plain'
+        m['payload']['body']={'data':base64.urlsafe_b64encode(b'From: Grace <grace@example.com>\nDate: Mon, 14 Sep 2026 12:00:00 +0000\nHello, partnership?').decode()}
+        r = thread_events({'id':'t','messages':[m]},'me@example.com',True,self.handoff_settings())[0]
+        self.assertEqual(r.kol_email,'grace@example.com')
+        self.assertEqual(r.threading_status,'brand_forward_needs_review')
+
+    def test_old_direct_auto_forward_is_not_admitted(self):
+        from brand_handoffs import thread_events
+        m = message('old',1000,'KOL <kol@example.com>',[],extra={'To':'partnerships@bluevua.com'})
+        self.assertEqual(thread_events({'id':'t','messages':[m]},'me@example.com',True,self.handoff_settings()),[])
+
+    def test_new_direct_auto_forward_uses_receipt_and_preserves_original_date(self):
+        from brand_handoffs import thread_events
+        m = message('new',3000,'KOL <kol@example.com>',[],subject='Bluevua partnership',extra={'To':'partnerships@bluevua.com'})
+        r = thread_events({'id':'t','messages':[m]},'me@example.com',True,self.handoff_settings())[0]
+        self.assertEqual(r.reply_date,'1970-01-01T00:00:03+00:00')
+        self.assertTrue(r.original_reply_date.startswith('2026-09-16'))
+        self.assertEqual(r.kol_email,'kol@example.com')
+
+    def test_reminder_cutoff_excludes_old_threads_and_recent_drafts(self):
+        from unreplied_reminders import pending_reply
+        t = {'messages': [message('a',1000,'KOL <k@example.com>',['brand'],subject='Bluevua'),
+                          message('draft',4000,'Me <me@example.com>',['DRAFT'])]}
+        self.established(t)
+        self.assertIsNone(pending_reply(t,'me@example.com','Bluevua',2000))
+        t['messages'].append(message('auto',5000,'Bot <bot@example.com>',['brand'],extra={'Auto-Submitted':'auto-replied'}))
+        self.assertIsNone(pending_reply(t,'me@example.com','Bluevua',2000))
+
+    def test_reminder_cutoff_inclusive_latest_activity_not_episode_start(self):
+        from unreplied_reminders import pending_reply
+        t = {'messages': [message('a',1000,'KOL <k@example.com>',['brand'],subject='Bluevua'),
+                          message('b',2000,'KOL <k@example.com>',['brand'])]}
+        self.established(t)
+        self.assertEqual(pending_reply(t,'me@example.com','Bluevua',2000)[1],1000)
+        t['messages'].append(message('out',3000,'Me <me@example.com>',['SENT']))
+        self.assertIsNone(pending_reply(t,'me@example.com','Bluevua',2000))
+
     def test_pending_reminder_ignores_draft_and_resets_on_sent(self):
         from unreplied_reminders import pending_reply
-        inbound = message('in', 1000, 'KOL <k@example.com>', ['INBOX', 'brand'])
+        inbound = message('in', 1000, 'KOL <k@example.com>', ['INBOX', 'brand'],subject='Bluevua')
         draft = message('draft', 2000, 'Me <me@example.com>', ['DRAFT'])
         t = {'messages': [inbound, draft]}
-        self.assertEqual(pending_reply(t, 'me@example.com', {'brand'})[0]['id'], 'in')
+        self.established(t)
+        self.assertEqual(pending_reply(t, 'me@example.com', 'Bluevua')[0]['id'], 'in')
         t['messages'].append(message('out', 3000, 'Me <alias@example.com>', ['SENT']))
-        self.assertIsNone(pending_reply(t, 'me@example.com', {'brand'}))
+        self.assertIsNone(pending_reply(t, 'me@example.com', 'Bluevua'))
 
     def test_pending_reminder_keeps_first_wait_time_and_latest_content(self):
         from unreplied_reminders import pending_reply
-        t = {'messages': [message('a',1000,'KOL <k@example.com>',['brand']),
+        t = {'messages': [message('a',1000,'KOL <k@example.com>',['brand'],subject='Bluevua'),
                           message('b',2000,'KOL <k@example.com>',['brand'])]}
-        m, since = pending_reply(t,'me@example.com',{'brand'})
+        self.established(t)
+        m, since = pending_reply(t,'me@example.com','Bluevua')
         self.assertEqual((m['id'],since),('b',1000))
-        self.assertIsNone(pending_reply(t,'me@example.com',{'other'}))
+        self.assertIsNone(pending_reply(t,'me@example.com','OtherBrand'))
+
+    def test_reminder_content_without_labels_and_thread_context(self):
+        from unreplied_reminders import pending_reply
+        t = {'messages':[message('sent',1000,'Me <me@example.com>',['SENT'],subject='BLUEVUA partnership'),
+                         message('reply',2000,'KOL <k@example.com>',[],subject='Interested!')]}
+        self.established(t)
+        self.assertEqual(pending_reply(t,'me@example.com','Bluevua')[0]['id'],'reply')
+        t['messages'][2]['payload']['headers'][1]['value']='Other project'
+        t['messages'][3]['labelIds']=['Bluevua']
+        self.assertIsNone(pending_reply(t,'me@example.com','Bluevua'))
+
+    def test_reminder_html_body_relevance_without_brand_subject(self):
+        from unreplied_reminders import pending_reply
+        m = message('reply',2000,'KOL <k@example.com>',[])
+        m['payload']['mimeType']='text/html'
+        m['payload']['body']={'data':base64.urlsafe_b64encode(b'<p>Interested in Bluevua collaboration</p>').decode()}
+        self.assertIsNotNone(pending_reply(self.established({'messages':[m]}),'me@example.com','bluevua'))
+
+    def test_reminder_requires_actual_answer_not_cold_outreach_or_draft(self):
+        from unreplied_reminders import pending_reply
+        t = {'messages':[message('outreach',100,'Me <me@example.com>',['SENT'],subject='Bluevua'),
+                         message('first-reply',200,'KOL <k@example.com>',[])]}
+        self.assertIsNone(pending_reply(t,'me@example.com','Bluevua'))
+        t['messages'].append(message('draft',300,'Me <me@example.com>',['DRAFT']))
+        self.assertIsNone(pending_reply(t,'me@example.com','Bluevua'))
+        t['messages'].append(message('answer',400,'Me <me@example.com>',['SENT']))
+        self.assertIsNone(pending_reply(t,'me@example.com','Bluevua'))
+        t['messages'].append(message('new-reply',500,'KOL <k@example.com>',[]))
+        self.assertEqual(pending_reply(t,'me@example.com','Bluevua')[1],500)
+
+    def test_reminder_activation_ignores_old_mail_but_uses_old_answer(self):
+        from unreplied_reminders import pending_reply
+        t = self.established({'messages':[message('old',1000,'KOL <k@example.com>',[],subject='Bluevua')]})
+        self.assertIsNone(pending_reply(t,'me@example.com','Bluevua',enabled_ms=2000))
+        t['messages'].append(message('new',3000,'KOL <k@example.com>',[]))
+        self.assertEqual(pending_reply(t,'me@example.com','Bluevua',enabled_ms=2000)[1],3000)
+
+    def test_reminder_once_until_new_inbound_starts_new_round(self):
+        from unreplied_reminders import pending_reply
+        t = self.established({'messages':[message('a',1000,'KOL <k@example.com>',[],subject='Bluevua'),
+                                           message('b',2000,'KOL <k@example.com>',[])]})
+        self.assertIsNone(pending_reply(t,'me@example.com','Bluevua',notified_ms=2000))
+        t['messages'].append(message('new',4000,'KOL <k@example.com>',[]))
+        self.assertEqual(pending_reply(t,'me@example.com','Bluevua',notified_ms=2000)[1],4000)
+        t['messages'].append(message('answer',5000,'Me <me@example.com>',['SENT']))
+        self.assertIsNone(pending_reply(t,'me@example.com','Bluevua',notified_ms=2000))
+
+    def test_reminder_activation_persists_across_restarts_and_upgrade(self):
+        import sqlite3
+        from unreplied_reminders import initialize_state
+        db = sqlite3.connect(':memory:')
+        db.execute('CREATE TABLE sent (key TEXT PRIMARY KEY, ts TEXT)')
+        self.assertEqual(initialize_state(db,1000),1000)
+        self.assertEqual(initialize_state(db,9999),1000)
+        db.close()
+
+    def test_reminder_worker_activation_once_and_new_round_delivery(self):
+        from unittest.mock import MagicMock
+        from tempfile import TemporaryDirectory
+        from unreplied_reminders import check_reminders
+        gmail = MagicMock()
+        gmail.mailbox = 'me@example.com'
+        gmail._execute.side_effect = lambda request: request.execute()
+        gmail.api.users().threads().list().execute.return_value = {'threads':[{'id':'t'}]}
+        thread = {'messages':[message('initial',60000,'KOL <k@example.com>',[],subject='Bluevua'),
+                              message('answer',70000,'Me <me@example.com>',['SENT']),
+                              message('old',80000,'KOL <k@example.com>',[])]}
+        gmail.api.users().threads().get().execute.side_effect = lambda: thread
+        store = MagicMock()
+        store.queue_rows.return_value = []
+        settings = {'unreplied_reminder_hours':'1', 'campaign_name_contains':'Bluevua',
+                    'reply_cutoff_date':'01/01/1970', 'pilot_recipient_slack_id':'pilot'}
+        def now(seconds):
+            return datetime.fromtimestamp(seconds, ZoneInfo('UTC'))
+        with TemporaryDirectory() as directory, patch('kol_followup.project_path',return_value=str(Path(directory)/'state.sqlite3')), \
+             patch('kol_followup.SlackNotifier') as slack, patch.dict('os.environ',{'GMAIL_THREAD_INTERVAL_SECONDS':'0'}):
+            slack.return_value.send_digest.return_value = 'ts'
+            self.assertEqual(check_reminders(gmail,store,[],settings,now(100)),0)
+            thread['messages'].append(message('new',200000,'KOL <k@example.com>',[]))
+            self.assertEqual(check_reminders(gmail,store,[],settings,now(6000)),1)
+            self.assertEqual(check_reminders(gmail,store,[],settings,now(6500)),0)
+            thread['messages'].append(message('next-round',7000000,'KOL <k@example.com>',[]))
+            self.assertEqual(check_reminders(gmail,store,[],settings,now(11000)),1)
+            self.assertEqual(check_reminders(gmail,store,[],settings,now(12000)),0)
+            self.assertEqual(slack.return_value.send_digest.call_count,2)
 
     def test_prior_followup_reply_blocks_later_reply_to_initial(self):
         thread = {'id': 't1', 'messages': [

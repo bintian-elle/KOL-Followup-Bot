@@ -1,5 +1,40 @@
 # KOL Follow-up Automation
 
+Overdue reminders use `campaign_name_contains` against case-insensitive subject
+and parsed text/HTML body across the conversation, not Gmail label names.
+Recently active threads throughout Gmail (including spam/archive) are checked
+after `reply_cutoff_date`. A short reply can inherit brand context from earlier
+mail. First-reach-out restrictions do not apply to reminders: an existing
+brand conversation may still have an overdue unanswered message. Threshold,
+pilot/owner routing, testing mirrors and episode deduplication are unchanged.
+
+Reminders require an established exchange: a human inbound followed by an
+actual message in our SENT mailbox, then a subsequent human inbound. Cold
+outreach alone and drafts do not enroll a thread. The new policy records its
+activation on the first production reminder run in `.unreplied-reminders.sqlite3`;
+earlier inbound mail never starts a clock, but historical exchanges establish
+eligibility. Preserve this database across updates/restarts. Each overdue round
+is delivered once; a fresh inbound after the delivered round starts a new clock,
+even if no outbound answer intervened. Our outbound answer clears the pending
+clock. Dry runs do not initialize activation or alter deduplication state.
+
+## Prospective Bluevua handoffs
+
+Config `brand_team_emails`, `forwarding_mailbox`, and the timezone-aware ISO
+`brand_handoff_enabled_at` enable the additional source only for newly received
+handoffs/auto-forwarded creator inquiries. Never move the activation timestamp
+backwards to backfill old mail. There is no 24-hour waiting rule or exclusion
+based on Mel/Jeremy replying within 24 hours.
+
+`brand_handoff_keywords` and `brand_handoff_exclude_keywords` are configurable.
+The worker reads the full thread, extracts the creator instead of the brand
+sender, checks related Gmail history and existing Queue identities, and never
+reopens an old handoff. Unverifiable forwarded bodies or ambiguous identities
+are routed to Needs Review, not confirmed first reach out. Original inquiry
+dates enforce `reply_cutoff_date`; Gmail receipt time controls activation and
+incremental scanning. Relevant historical messages are read for verification
+only, never backfilled by this source.
+
 This worker detects the first external reply in Gmail threads selected by a
 strict Upfluence Gmail query, appends the KOL to Google Sheets, assigns one of
 three owners in round-robin order, and sends the owner a Slack task.
