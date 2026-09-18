@@ -1,5 +1,6 @@
 .env
 .DS_Store
+.unreplied-reminders.sqlite3*
 backups/
 gmail-oauth-credential.json
 *service-account*.json

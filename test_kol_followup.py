@@ -36,6 +36,23 @@ def message(mid, date, sender, labels, subject="Hello", message_id=None, in_repl
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_pending_reminder_ignores_draft_and_resets_on_sent(self):
+        from unreplied_reminders import pending_reply
+        inbound = message('in', 1000, 'KOL <k@example.com>', ['INBOX', 'brand'])
+        draft = message('draft', 2000, 'Me <me@example.com>', ['DRAFT'])
+        t = {'messages': [inbound, draft]}
+        self.assertEqual(pending_reply(t, 'me@example.com', {'brand'})[0]['id'], 'in')
+        t['messages'].append(message('out', 3000, 'Me <alias@example.com>', ['SENT']))
+        self.assertIsNone(pending_reply(t, 'me@example.com', {'brand'}))
+
+    def test_pending_reminder_keeps_first_wait_time_and_latest_content(self):
+        from unreplied_reminders import pending_reply
+        t = {'messages': [message('a',1000,'KOL <k@example.com>',['brand']),
+                          message('b',2000,'KOL <k@example.com>',['brand'])]}
+        m, since = pending_reply(t,'me@example.com',{'brand'})
+        self.assertEqual((m['id'],since),('b',1000))
+        self.assertIsNone(pending_reply(t,'me@example.com',{'other'}))
+
     def test_prior_followup_reply_blocks_later_reply_to_initial(self):
         thread = {'id': 't1', 'messages': [
             message('initial', 1, 'Me <me@example.com>', ['SENT'], message_id='<initial>'),

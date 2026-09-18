@@ -1342,6 +1342,8 @@ def run(dry_run: bool, force_digest: bool = False) -> int:
                 item.reason, item.reply.subject,
             )
         LOG.info("Dry run planned %d new Queue row(s)", len(planned))
+        from unreplied_reminders import check_reminders
+        check_reminders(gmail, store, owners, settings, datetime.now(tz), dry_run=True)
         return len(planned)
 
     notification_col = QUEUE_HEADERS.index("Notification Status")
@@ -1448,6 +1450,8 @@ def run(dry_run: bool, force_digest: bool = False) -> int:
     store.refresh_owner_totals()
     store.prune_audit(now)
     store.sort_newest_first()
+    from unreplied_reminders import check_reminders
+    check_reminders(gmail, store, owners, settings, datetime.now(tz))
     return len(planned)
 
 
