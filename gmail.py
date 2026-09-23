@@ -8,7 +8,7 @@ CLIENT_ID = os.getenv("GMAIL_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET")
 
 SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly"
+    "https://www.googleapis.com/auth/gmail.modify"
 ]
 
 client_config = {

@@ -1,5 +1,5 @@
 [Unit]
-Description=KOL Follow-up continuous monitor
+Description=Bluevua KOL Follow-up Bot
 Wants=network-online.target
 After=network-online.target
 
@@ -7,11 +7,11 @@ After=network-online.target
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/KOL-Followup-Bot
-ExecStart=/home/ubuntu/KOL-Followup-Bot/.venv/bin/python kol_followup.py --monitor
+ExecStart=/home/ubuntu/KOL-Followup-Bot/.venv/bin/python run_bot.py
 Environment=PYTHONUNBUFFERED=1
-Restart=on-failure
-RestartSec=30
-TimeoutStopSec=15min
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
 UMask=0077
 
 [Install]

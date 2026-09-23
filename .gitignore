@@ -6,6 +6,16 @@ gmail-oauth-credential.json
 *service-account*.json
 credentials/
 .kol-followup.lock
+.needs-review-state.json
+.needs-review.lock
+.needs-review-monitor.json
+.needs-review-events.jsonl
+.bot-runner.lock
+.assignment-slack-sent.json
+.reply-reminders-sent.json
+.reach-out-replies.json
+.slack-command-state.json
+.slack-home-state.json
 .venv/
 __pycache__/
 .pytest_cache/
