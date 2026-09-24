@@ -1,7 +1,7 @@
 """Resolve the Gmail labels that count as Bluevua KOL Active."""
 
 
-UPFLUENCE_REPLY_SUFFIX = "Upfluence Reply"
+UPFLUENCE_REPLY_SUFFIX = "02_Upfluence Reply"
 
 
 def cell(row, index):
