@@ -1,6 +1,9 @@
 """Resolve the Gmail labels that count as Bluevua KOL Active."""
 
 
+UPFLUENCE_REPLY_SUFFIX = "Upfluence Reply"
+
+
 def cell(row, index):
     return str(row[index]).strip() if len(row) > index else ""
 
@@ -16,6 +19,29 @@ def team_member_names(config_rows):
             break
         names.append(name)
     return names
+
+
+def upfluence_reply_label_name(config_rows):
+    settings = {cell(row, 0): cell(row, 1) for row in config_rows if len(row) > 1}
+    suffix = settings.get("gmail_upfluence_reply_label", UPFLUENCE_REPLY_SUFFIX)
+    return settings["gmail_active_label"] + "/" + suffix
+
+
+def ensure_upfluence_reply_label(gmail, gmail_labels, config_rows):
+    """Create the Upfluence reply marker label once and return its ID."""
+    name = upfluence_reply_label_name(config_rows)
+    matches = [item for item in gmail_labels if item["name"].casefold() == name.casefold()]
+    if len(matches) > 1:
+        raise RuntimeError(f"Expected at most one Gmail label named {name!r}; found {len(matches)}")
+    if matches:
+        return matches[0]["id"]
+    created = gmail.labels().create(userId="me", body={
+        "name": name,
+        "labelListVisibility": "labelShow",
+        "messageListVisibility": "show",
+    }).execute()
+    gmail_labels.append(created)
+    return created["id"]
 
 
 def resolve_active_labels(gmail_labels, config_rows):
@@ -39,6 +65,10 @@ def resolve_active_labels(gmail_labels, config_rows):
         raise RuntimeError("Missing Gmail labels: " + ", ".join(missing))
 
     owner_by_label_id = {by_name[name.casefold()]: owner for owner, name in wanted}
+    upfluence_name = upfluence_reply_label_name(config_rows)
+    upfluence_id = by_name.get(upfluence_name.casefold(), "")
+    if upfluence_id:
+        owner_by_label_id[upfluence_id] = ""
     active_ids = set(owner_by_label_id)
     return {
         "parent_name": parent_name,
@@ -46,4 +76,5 @@ def resolve_active_labels(gmail_labels, config_rows):
         "active_ids": active_ids,
         "owner_by_label_id": owner_by_label_id,
         "review_id": by_name[review_name.casefold()],
+        "upfluence_reply_id": upfluence_id,
     }

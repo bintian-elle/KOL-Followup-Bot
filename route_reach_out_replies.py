@@ -12,7 +12,7 @@ from googleapiclient.discovery import build
 
 from assign_active import ROOT, cell, load_env
 from sheet_state import SheetState
-from gmail_active_labels import resolve_active_labels
+from gmail_active_labels import ensure_upfluence_reply_label, resolve_active_labels
 from sync_reach_out import HEADER, TAB, call, first_human_reply, route_complete
 
 
@@ -43,8 +43,12 @@ def main():
     credentials.refresh(Request())
     gmail = build("gmail", "v1", credentials=credentials, cache_discovery=False).users()
     labels = call(gmail.labels().list(userId="me")).get("labels", [])
+    if not args.dry_run:
+        ensure_upfluence_reply_label(gmail, labels, config)
     active = resolve_active_labels(labels, config)
-    parent_id, review_id = active["parent_id"], active["review_id"]
+    upfluence_reply_id, review_id = active["upfluence_reply_id"], active["review_id"]
+    if not args.dry_run and not upfluence_reply_id:
+        raise RuntimeError("Upfluence Reply Gmail label could not be resolved")
     internal = {settings["gmail_mailbox"].strip().lower(), "partnerships@bluevua.com", "pr@bluevua.com"}
     internal.update(address.strip().lower() for address in settings.get("brand_team_emails", "").split(","))
 
@@ -77,7 +81,7 @@ def main():
         if not event["labeled"]:
             thread = call(gmail.threads().get(userId="me", id=thread_id, format="minimal"))
             current_labels = {label for message in thread["messages"] for label in message.get("labelIds", [])}
-            body = {"addLabelIds": [] if parent_id in current_labels else [parent_id],
+            body = {"addLabelIds": [] if upfluence_reply_id in current_labels else [upfluence_reply_id],
                     "removeLabelIds": [review_id] if review_id in current_labels else []}
             if body["addLabelIds"] or body["removeLabelIds"]:
                 call(gmail.threads().modify(userId="me", id=thread_id, body=body))
