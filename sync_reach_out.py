@@ -30,11 +30,7 @@ HEADER = ["Gmail Thread ID", "Reach Out Sent At", "Campaign / Context", "Gmail T
 
 
 def route_complete(event):
-    if not event.get("labeled"):
-        return False
-    if event.get("route") == "developer":
-        return bool(event.get("developer_ts"))
-    return bool(event.get("channel_ts") and event.get("dm_ts"))
+    return bool(event.get("labeled"))
 
 
 def load_env():
@@ -173,7 +169,7 @@ def main():
             if item["threadId"] in by_thread:
                 event = transitions.get(item["threadId"], {})
                 if not route_complete(event):
-                    raise RuntimeError("A tracked Reach Out received a reply before Needs Review routing completed; preserving Track rows")
+                    raise RuntimeError("A tracked Reach Out received a reply before Active routing completed; preserving Track rows")
             replied += 1
             continue
         name, email = recipients[0]

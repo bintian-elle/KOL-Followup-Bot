@@ -10,6 +10,8 @@ ongoing work, and sends Slack notifications and daily summaries.
   configured member child labels.
 - Give member child labels priority over round robin Sheet assignments.
 - Keep unanswered Upfluence outreach in `Reach_Out_Track`.
+- Move the first human reply to an Upfluence outreach directly into Active
+  tracking for assignment, without a separate first-reply Slack alert.
 - Route eligible unanswered inbound inquiries to `01_Needs Review`.
 - Assign new Active tasks in Config round robin order.
 - Send one reminder when a `Needs Reply` task passes 24 hours.

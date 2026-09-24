@@ -42,6 +42,7 @@ def resolve_active_labels(gmail_labels, config_rows):
     active_ids = set(owner_by_label_id)
     return {
         "parent_name": parent_name,
+        "parent_id": by_name[parent_name.casefold()],
         "active_ids": active_ids,
         "owner_by_label_id": owner_by_label_id,
         "review_id": by_name[review_name.casefold()],
