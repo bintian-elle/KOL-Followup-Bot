@@ -185,7 +185,9 @@ def main():
         if index % 100 == 0:
             print(f"Checked {index}/{len(candidates)}", flush=True)
 
-    selected.sort(key=lambda pair: pair[0], reverse=True)
+    # Keep bounced addresses together at the top for quick cleanup. Within
+    # both the bounced and normal groups, preserve newest-first sent order.
+    selected.sort(key=lambda pair: (pair[1][6] == "Address not found", pair[0]), reverse=True)
     rows = [row for _, row in selected]
     old_count = len(existing) - 1
     values = rows + [[""] * len(HEADER) for _ in range(max(0, old_count - len(rows)))]
