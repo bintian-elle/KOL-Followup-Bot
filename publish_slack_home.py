@@ -21,7 +21,7 @@ def home_view(sheet_id):
             {"type": "section", "text": {"type": "mrkdwn", "text": "*`rm` — Remove Needs Review threads from Bluevua tracking Label (Shanshan and Candice only)*\nThe emails will leave Active Track after the next scan. It does not delete emails. This runs immediately."}},
             {"type": "divider"},
             {"type": "section", "text": {"type": "mrkdwn", "text": f"<{sheet_url}|Open the Bluevua KOL Follow-up Bot working sheet>"}},
-            {"type": "section", "text": {"type": "mrkdwn", "text": "• *Bluevua_KOL_Active_Track* — Ongoing task tracking\n• *Reach_Out_Track* — Reach outs sent through Upfluence that are still awaiting replies\n• *Config* — Other bot settings"}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": "• *Bluevua_KOL_Active_Track* — Ongoing task tracking\n• *Reach_Out_Track* — Reach outs sent through Upfluence that are still awaiting replies\n• *RM_Audit* — Recoverable history of labels removed by the `rm` command\n• *Config* — Other bot settings"}},
         ],
     }
 

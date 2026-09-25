@@ -4,6 +4,8 @@ import asyncio
 import json
 import os
 import urllib.request
+import uuid
+from datetime import datetime, timezone
 
 import websockets
 from google.auth.transport.requests import Request
@@ -16,6 +18,7 @@ from slack_commands import list_label_threads, remove_all_review_labels, summary
 from sync_needs_review import call
 from sync_reach_out import HEADER as REACH_HEADER, TAB as REACH_TAB
 from gmail_active_labels import resolve_active_labels
+from rm_audit import append_batch, ensure_tab, mark_batch_removed
 
 
 def socket_url(app_token):
@@ -38,7 +41,7 @@ class CommandHandler:
         self.sheet_id = os.environ["GOOGLE_SHEET_ID"]
         credentials = service_account.Credentials.from_service_account_file(
             str(ROOT / os.environ["GOOGLE_SERVICE_ACCOUNT_FILE"]),
-            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
+            scopes=["https://www.googleapis.com/auth/spreadsheets"],
         )
         self.sheets = build("sheets", "v4", credentials=credentials, cache_discovery=False).spreadsheets()
         config = self.refresh_authorized()
@@ -54,6 +57,8 @@ class CommandHandler:
         active = resolve_active_labels(labels, config)
         self.review_id = active["review_id"]
         self.active_family_label_ids = active["active_ids"] | {self.review_id}
+        self.label_name_by_id = {item["id"]: item["name"] for item in labels}
+        ensure_tab(self.sheets, self.sheet_id)
         self.bot_token = os.environ["SLACK_BOT_TOKEN"]
 
     def refresh_authorized(self):
@@ -88,9 +93,31 @@ class CommandHandler:
         if command != "rm" and user_id not in self.authorized:
             return
         if command == "rm":
-            removed = remove_all_review_labels(self.gmail, self.review_id, self.active_family_label_ids)
+            thread_ids = list_label_threads(self.gmail, self.review_id)
+            snapshots = []
+            for thread_id in thread_ids:
+                thread = call(self.gmail.threads().get(
+                    userId="me", id=thread_id, format="metadata", metadataHeaders=["Subject"],
+                ))
+                labels = {label_id for message in thread["messages"] for label_id in message.get("labelIds", [])}
+                subject = ""
+                for message in thread["messages"]:
+                    subject = next((header["value"] for header in message["payload"].get("headers", [])
+                                    if header["name"].casefold() == "subject"), subject)
+                    if subject:
+                        break
+                snapshots.append({"thread_id": thread_id, "subject": subject,
+                                  "labels": sorted(self.label_name_by_id[label_id]
+                                                   for label_id in labels & self.active_family_label_ids)})
+            batch_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
+            append_batch(self.sheets, self.sheet_id, batch_id, user_id, snapshots)
+            removed = remove_all_review_labels(self.gmail, self.review_id, self.active_family_label_ids, thread_ids)
+            marked = mark_batch_removed(self.sheets, self.sheet_id, batch_id)
+            if marked != removed:
+                raise RuntimeError(f"RM_Audit batch {batch_id} recorded {marked} of {removed} removed threads")
             response = (f"Removed all Bluevua KOL Active labels from {removed} Needs Review email threads. "
-                        "The emails are no longer in Needs Review or Active Track. No emails were deleted.")
+                        f"Audit batch: `{batch_id}`. The emails are no longer in Needs Review or Active Track. "
+                        "No emails were deleted.")
         elif command == "summary":
             active_rows = call(self.sheets.values().get(spreadsheetId=self.sheet_id, range=f"'{TAB}'!A1:L10000")).get("values", [])
             reach_rows = call(self.sheets.values().get(spreadsheetId=self.sheet_id, range=f"'{REACH_TAB}'!A1:H10000")).get("values", [])

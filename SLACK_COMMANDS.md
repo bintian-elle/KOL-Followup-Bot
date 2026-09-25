@@ -6,7 +6,7 @@ separate one-minute schedule.
 
 ## Commands
 
-- `rm`: for every thread currently carrying `Bluevua_KOL_Active/01_Needs Review`, remove that label plus the `Bluevua_KOL_Active` parent and every configured member child label. Those threads leave Active Track on the next scan. This never deletes email. Only Shanshan and Candice (from `pilot_recipient_slack_id`) may run it.
+- `rm`: for every thread currently carrying `Bluevua_KOL_Active/01_Needs Review`, record its complete Bluevua label state in the visible `RM_Audit` tab, then remove that label plus the `Bluevua_KOL_Active` parent and every configured child label. Those threads leave Active Track on the next scan. This never deletes email. Only Shanshan and Candice (from `pilot_recipient_slack_id`) may run it.
 - `summary`: report Active Track total, Needs Reply total, Needs Review total, task count by owner, unanswered Reach Out total, and the Google Sheet link.
 - `task`: list the requesting member's assigned KOLs, Gmail links, and current reply status.
 

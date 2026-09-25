@@ -35,9 +35,9 @@ def task_text(active_rows, owner_name):
     return "\n".join(lines)
 
 
-def remove_all_review_labels(gmail, review_id, active_label_ids=None):
+def remove_all_review_labels(gmail, review_id, active_label_ids=None, thread_ids=None):
     """Remove the whole Bluevua Active label family from Needs Review threads."""
-    thread_ids = list_label_threads(gmail, review_id)
+    thread_ids = list(thread_ids) if thread_ids is not None else list_label_threads(gmail, review_id)
     remove_ids = sorted(set(active_label_ids or ()) | {review_id})
     for thread_id in thread_ids:
         call(gmail.threads().modify(userId="me", id=thread_id, body={"removeLabelIds": remove_ids}))
