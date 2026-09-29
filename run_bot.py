@@ -16,13 +16,19 @@ INTERVAL_SECONDS = 60
 
 
 def run_script(name):
-    result = subprocess.run([sys.executable, str(ROOT / name)], cwd=ROOT, capture_output=True, text=True)
-    stamp = datetime.now(timezone.utc).isoformat()
-    for line in (result.stdout + result.stderr).splitlines():
-        print(f"{stamp} {name}: {line}", flush=True)
-    if result.returncode:
-        print(f"{stamp} {name}: FAILED (exit {result.returncode})", flush=True)
-    return result.returncode
+    process = subprocess.Popen(
+        [sys.executable, str(ROOT / name)], cwd=ROOT,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1,
+    )
+    for line in process.stdout:
+        stamp = datetime.now(timezone.utc).isoformat()
+        print(f"{stamp} {name}: {line.rstrip()}", flush=True)
+    return_code = process.wait()
+    if return_code:
+        stamp = datetime.now(timezone.utc).isoformat()
+        print(f"{stamp} {name}: FAILED (exit {return_code})", flush=True)
+    return return_code
 
 
 def cycle():

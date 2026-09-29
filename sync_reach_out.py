@@ -162,7 +162,7 @@ def main():
             userId="me", id=item["threadId"], format="metadata",
             metadataHeaders=["From", "To", "Cc", "Subject"],
         ))
-        time.sleep(float(os.getenv("GMAIL_THREAD_INTERVAL_SECONDS", "2.5")))
+        time.sleep(float(os.getenv("GMAIL_THREAD_INTERVAL_SECONDS", "0.25")))
         conversation = sorted(thread["messages"], key=lambda msg: int(msg["internalDate"]))
         message = conversation[0]
         if message["id"] != item["id"]:

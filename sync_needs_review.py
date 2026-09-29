@@ -182,6 +182,7 @@ def main():
             f'in:anywhere {date} to:{config.get("forwarding_mailbox", "").strip()}',
         ]
         candidates = set().union(*(list_thread_ids(gmail, query) for query in queries))
+        print(f"Needs Review candidates since {since}: {len(candidates)}", flush=True)
         monitor_state = state_store.load("needs_review_monitor", {})
         removed_from_review = set(monitor_state.get("removed_thread_ids", []))
         count = {"scanned": 0, "labeled": 0, "eligible": 0}
@@ -202,7 +203,9 @@ def main():
                 else:
                     call(gmail.threads().modify(userId="me", id=thread_id, body={"addLabelIds": [review_label]}))
                     count["labeled"] += 1
-            time.sleep(float(os.getenv("GMAIL_THREAD_INTERVAL_SECONDS", "2.5")))
+            if count["scanned"] % 25 == 0:
+                print(f"Needs Review checked: {count['scanned']}/{len(candidates)}", flush=True)
+            time.sleep(float(os.getenv("GMAIL_THREAD_INTERVAL_SECONDS", "0.25")))
 
         if not args.dry_run:
             state_store.save("needs_review_scan", {"config_start": config_start,
