@@ -28,6 +28,21 @@ def home_view(sheet_id):
     }
 
 
+def home_users(config):
+    """Return everyone who needs task help or administrative instructions."""
+    members = team_from_config(config)
+    developer = next((row for row in config if cell(row, 0) == "Testing developer"), None)
+    if not developer:
+        raise RuntimeError("Testing developer Config row missing")
+    developer_id = cell(developer, 3)
+    if truth(cell(developer, 2)):
+        return [developer_id] if developer_id else []
+    settings = {cell(row, 0): cell(row, 1) for row in config if len(row) > 1}
+    users = [member["slack_id"] for member in members if member["active"]]
+    users.extend([settings.get("pilot_recipient_slack_id", "").strip(), developer_id])
+    return [user for user in dict.fromkeys(users) if user]
+
+
 def main():
     load_env()
     sheet_id = os.environ["GOOGLE_SHEET_ID"]
@@ -38,13 +53,7 @@ def main():
     sheets = build("sheets", "v4", credentials=credentials, cache_discovery=False).spreadsheets()
     values = sheets.values()
     config = values.get(spreadsheetId=sheet_id, range="'Config'!A1:E100").execute().get("values", [])
-    members = team_from_config(config)
-    developer = next((row for row in config if cell(row, 0) == "Testing developer"), None)
-    if not developer:
-        raise RuntimeError("Testing developer Config row missing")
-    developer_mode = truth(cell(developer, 2))
-    users = [cell(developer, 3)] if developer_mode else [member["slack_id"] for member in members if member["active"]]
-    users = [user for user in dict.fromkeys(users) if user]
+    users = home_users(config)
     view = home_view(sheet_id)
     token = os.environ.get("SLACK_BOT_TOKEN", "")
     if not token:
