@@ -12,6 +12,17 @@ separate one-minute schedule.
 
 Commands must be the entire message, ignoring surrounding spaces and letter case.
 
+## Gmail labels
+
+- `01_Needs Review`: new inbound KOL emails waiting for review.
+- `02_Upfluence Replied`: Upfluence outreach that received its first reply.
+- A member name label: manually assigns the task to that member.
+- `03_Completed`: collaboration or communication completed.
+- `04_Not Moving Forward`: the team decided not to proceed.
+
+The two closure labels remove the thread from Active Track and record it in
+`Closed_Track`. They do not delete or archive the email.
+
 When `Testing developer` is active, only that configured user is authorized and replies go only to that DM. When it is inactive, active Team rotation members are authorized and each response returns to the requesting member's DM.
 
 ## Slack app setup

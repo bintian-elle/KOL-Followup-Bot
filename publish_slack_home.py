@@ -20,6 +20,8 @@ def home_view(sheet_id):
             {"type": "section", "text": {"type": "mrkdwn", "text": "*`summary` — View the current summary*\n• Active Track and Needs Reply totals\n• Needs Review total\n• Task count by team member\n• Reach Out awaiting reply total\n• Google Sheet link"}},
             {"type": "section", "text": {"type": "mrkdwn", "text": "*`rm` — Remove Needs Review threads from Bluevua tracking Label (Shanshan and Candice only)*\nThe emails will leave Active Track after the next scan. It does not delete emails. This runs immediately."}},
             {"type": "divider"},
+            {"type": "section", "text": {"type": "mrkdwn", "text": "*Gmail labels*\n• `01_Needs Review` — New inbound KOL emails waiting for review\n• `02_Upfluence Replied` — Upfluence outreach that received its first reply\n• Member name — Manually assign the task to that member\n• `03_Completed` — Collaboration or communication completed\n• `04_Not Moving Forward` — We decided not to proceed\n\nMove finished tasks to `03_Completed` or `04_Not Moving Forward`. The bot removes them from Active Track and records them in `Closed_Track`. Emails are never deleted."}},
+            {"type": "divider"},
             {"type": "section", "text": {"type": "mrkdwn", "text": f"<{sheet_url}|Open the Bluevua KOL Follow-up Bot working sheet>"}},
             {"type": "section", "text": {"type": "mrkdwn", "text": "• *Bluevua_KOL_Active_Track* — Ongoing task tracking\n• *Reach_Out_Track* — Reach outs sent through Upfluence that are still awaiting replies\n• *Closed_Track* — Completed and Not Moving Forward history\n• *RM_Audit* — Recoverable history of labels removed by the `rm` command\n• *Config* — Other bot settings"}},
         ],
