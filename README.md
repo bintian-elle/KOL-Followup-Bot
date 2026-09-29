@@ -10,6 +10,8 @@ ongoing work, and sends Slack notifications and daily summaries.
   configured member child labels.
 - Give member child labels priority over round robin Sheet assignments.
 - Keep unanswered Upfluence outreach in `Reach_Out_Track`.
+- Store the last successful Reach Out scan in `Bot_State` and search only new
+  outbound mail after that checkpoint, with a five-minute overlap.
 - Move the first human reply to an Upfluence outreach directly into the
   `Bluevua_KOL_Active/02_Upfluence Replied` marker label for assignment, without a
   separate first-reply Slack alert.

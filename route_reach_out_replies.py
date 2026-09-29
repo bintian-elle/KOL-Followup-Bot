@@ -13,7 +13,7 @@ from googleapiclient.discovery import build
 from assign_active import ROOT, cell, load_env
 from sheet_state import SheetState
 from gmail_active_labels import ensure_upfluence_reply_label, resolve_active_labels
-from sync_reach_out import HEADER, TAB, call, first_human_reply, route_complete
+from sync_reach_out import HEADER, TAB, address_not_found, call, first_human_reply, route_complete
 
 
 def main():
@@ -52,12 +52,17 @@ def main():
     internal = {settings["gmail_mailbox"].strip().lower(), "partnerships@bluevua.com", "pr@bluevua.com"}
     internal.update(address.strip().lower() for address in settings.get("brand_team_emails", "").split(","))
 
-    for row in rows[1:]:
+    status_updates = []
+    for row_number, row in enumerate(rows[1:], 2):
         thread_id = cell(row, 0)
-        if not thread_id or thread_id in state:
+        if not thread_id:
             continue
         thread = call(gmail.threads().get(userId="me", id=thread_id, format="metadata", metadataHeaders=["From", "Subject"]))
         conversation = sorted(thread["messages"], key=lambda item: int(item["internalDate"]))
+        if address_not_found(conversation) and cell(row, 6).casefold() != "address not found":
+            status_updates.append({"range": f"'{TAB}'!G{row_number}", "values": [["Address not found"]]})
+        if thread_id in state:
+            continue
         reply = first_human_reply(conversation, internal)
         if not reply:
             continue
@@ -68,6 +73,13 @@ def main():
         state[thread_id] = {"row": row, "reply_id": reply["id"], "labeled": False,
                             "created_at": datetime.now(timezone.utc).isoformat()}
         sheet_state.save("reach_out_replies", state)
+
+    if status_updates and not args.dry_run:
+        call(sheets.values().batchUpdate(
+            spreadsheetId=sheet_id,
+            body={"valueInputOption": "RAW", "data": status_updates},
+        ))
+        print(f"Updated Address not found: {len(status_updates)}", flush=True)
 
     if args.dry_run:
         print(f"Pending transitions: {sum(not route_complete(e) for e in state.values())}")

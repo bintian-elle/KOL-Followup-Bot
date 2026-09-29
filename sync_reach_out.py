@@ -5,12 +5,11 @@ message in the conversation are the available proxy. This script never sends
 Slack messages or modifies Gmail.
 """
 
-import json
 import os
 import re
 import time
 import warnings
-from datetime import datetime
+from datetime import datetime, timezone
 from email.utils import getaddresses, parseaddr
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -87,6 +86,31 @@ def first_human_reply(conversation, internal):
     return None
 
 
+def address_not_found(conversation):
+    """Return True when Gmail attached a delivery failure to this thread."""
+    for message in conversation[1:]:
+        headers = {h["name"].lower(): h["value"] for h in message["payload"].get("headers", [])}
+        sender = parseaddr(headers.get("from", ""))[1].casefold()
+        subject = headers.get("subject", "").casefold()
+        if ("mailer-daemon" in sender or "postmaster" in sender) and (
+                "failure" in subject or "address not found" in message.get("snippet", "").casefold()):
+            return True
+    return False
+
+
+def incremental_start(config_start, checkpoint, has_existing_rows, scan_started):
+    """Choose a safe Gmail query boundary and whether a full rebuild is needed."""
+    config_epoch = int(config_start.timestamp())
+    if (checkpoint.get("config_start") == config_epoch
+            and checkpoint.get("last_successful_scan_started")):
+        return max(config_epoch, int(checkpoint["last_successful_scan_started"]) - 300), False
+    # Existing Track rows are a safe bootstrap for an upgraded running bot.
+    # Search a five-minute overlap instead of rebuilding years of current data.
+    if not checkpoint and has_existing_rows:
+        return max(config_epoch, scan_started - 300), False
+    return config_epoch, True
+
+
 def main():
     load_env()
     sheet_id = os.environ["GOOGLE_SHEET_ID"]
@@ -107,6 +131,9 @@ def main():
         raise RuntimeError("Reach_Out_Track columns changed; refusing to write")
     by_thread = {row[0]: row for row in existing[1:] if row and row[0]}
     transitions = state.load("reach_out_replies", {})
+    checkpoint = state.load("reach_out_scan", {})
+    scan_started = int(time.time())
+    since, full_scan = incremental_start(start, checkpoint, bool(by_thread), scan_started)
 
     gmail_credentials = Credentials(
         None, refresh_token=os.environ["GMAIL_REFRESH_TOKEN"],
@@ -116,11 +143,17 @@ def main():
     )
     gmail_credentials.refresh(Request())
     gmail = build("gmail", "v1", credentials=gmail_credentials, cache_discovery=False).users()
-    period = f"after:{int(start.timestamp())}"
+    period = f"after:{since}"
     candidates = list_messages(gmail, f'in:sent {period} from:{mailbox} subject:{brand} -subject:Re: -subject:Fwd:')
-    print(f"Candidate messages: {len(candidates)}", flush=True)
+    mode = "full" if full_scan else "incremental"
+    print(f"Reach Out scan: {mode}; after: {datetime.fromtimestamp(since, timezone.utc).isoformat()}; candidate messages: {len(candidates)}", flush=True)
 
-    selected = []
+    selected = {}
+    if not full_scan:
+        for thread_id, row in by_thread.items():
+            if not route_complete(transitions.get(thread_id, {})):
+                padded = row[:len(HEADER)] + [""] * max(0, len(HEADER) - len(row))
+                selected[thread_id] = (padded[1], padded)
     skipped = 0
     replied = 0
     selected_threads = set()
@@ -157,38 +190,33 @@ def main():
         selected_threads.add(item["threadId"])
         internal = {mailbox, "partnerships@bluevua.com", "pr@bluevua.com"}
         internal.update(x.strip().lower() for x in config.get("brand_team_emails", "").split(","))
-        bounce = False
-        for later in conversation[1:]:
-            later_headers = {h["name"].lower(): h["value"] for h in later["payload"].get("headers", [])}
-            later_sender = parseaddr(later_headers.get("from", ""))[1].lower()
-            later_subject = later_headers.get("subject", "").casefold()
-            if "mailer-daemon" in later_sender or "postmaster" in later_sender:
-                if "failure" in later_subject or "address not found" in later.get("snippet", "").casefold():
-                    bounce = True
         if first_human_reply(conversation, internal):
             if item["threadId"] in by_thread:
                 event = transitions.get(item["threadId"], {})
                 if not route_complete(event):
                     raise RuntimeError("A tracked Reach Out received a reply before Active routing completed; preserving Track rows")
             replied += 1
+            selected.pop(item["threadId"], None)
             continue
         name, email = recipients[0]
         sent_at = datetime.fromtimestamp(int(message["internalDate"]) / 1000, tz).strftime("%Y-%m-%d %H:%M:%S %Z")
-        status = "Address not found" if bounce else "Reach out sent"
+        status = "Address not found" if address_not_found(conversation) else "Reach out sent"
         thread_id = item["threadId"]
         previous = by_thread.get(thread_id, [])
         name = (previous[4] if len(previous) > 4 else "") or name or creator_name_from_subject(subject)
         row = [thread_id, sent_at, subject,
                f"https://mail.google.com/mail/u/0/#all/{thread_id}",
                name, email, status, item["id"]]
-        selected.append((int(message["internalDate"]), row))
+        selected[thread_id] = (sent_at, row)
         if index % 100 == 0:
             print(f"Checked {index}/{len(candidates)}", flush=True)
 
     # Keep bounced addresses together at the top for quick cleanup. Within
     # both the bounced and normal groups, preserve newest-first sent order.
-    selected.sort(key=lambda pair: (pair[1][6] == "Address not found", pair[0]), reverse=True)
-    rows = [row for _, row in selected]
+    ordered = sorted(selected.values(), key=lambda pair: (
+        pair[1][6] == "Address not found", pair[0]
+    ), reverse=True)
+    rows = [row for _, row in ordered]
     old_count = len(existing) - 1
     values = rows + [[""] * len(HEADER) for _ in range(max(0, old_count - len(rows)))]
     if values:
@@ -196,6 +224,12 @@ def main():
             spreadsheetId=sheet_id, range=f"'{TAB}'!A2:H{len(values) + 1}",
             valueInputOption="RAW", body={"values": values},
         ))
+    state.save("reach_out_scan", {
+        "config_start": int(start.timestamp()),
+        "last_successful_scan_started": scan_started,
+        "last_successful_scan_at": datetime.fromtimestamp(scan_started, timezone.utc).isoformat(),
+        "mode": mode,
+    })
     new_count = sum(row[0] not in by_thread for row in rows)
     print(f"Tracked unanswered: {len(rows)}; new: {new_count}; replied excluded: {replied}; skipped: {skipped}; bounced: {sum(row[6] == 'Address not found' for row in rows)}")
 
