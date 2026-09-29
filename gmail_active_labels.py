@@ -1,7 +1,9 @@
 """Resolve the Gmail labels that count as Bluevua KOL Active."""
 
 
-UPFLUENCE_REPLY_SUFFIX = "02_Upfluence Reply"
+UPFLUENCE_REPLY_SUFFIX = "02_Upfluence Replied"
+COMPLETED_SUFFIX = "03_Completed"
+NOT_MOVING_FORWARD_SUFFIX = "04_Not Moving Forward"
 
 
 def cell(row, index):
@@ -25,6 +27,28 @@ def upfluence_reply_label_name(config_rows):
     settings = {cell(row, 0): cell(row, 1) for row in config_rows if len(row) > 1}
     suffix = settings.get("gmail_upfluence_reply_label", UPFLUENCE_REPLY_SUFFIX)
     return settings["gmail_active_label"] + "/" + suffix
+
+
+def closed_label_names(config_rows):
+    """Return the two labels that close a thread and remove it from Active."""
+    settings = {cell(row, 0): cell(row, 1) for row in config_rows if len(row) > 1}
+    parent = settings["gmail_active_label"]
+    return {
+        "Completed": parent + "/" + settings.get("gmail_completed_label", COMPLETED_SUFFIX),
+        "Not Moving Forward": parent + "/" + settings.get(
+            "gmail_not_moving_forward_label", NOT_MOVING_FORWARD_SUFFIX
+        ),
+    }
+
+
+def resolve_closed_labels(gmail_labels, config_rows):
+    """Resolve closure outcome names to Gmail label IDs."""
+    by_name = {item["name"].casefold(): item["id"] for item in gmail_labels}
+    names = closed_label_names(config_rows)
+    missing = [name for name in names.values() if name.casefold() not in by_name]
+    if missing:
+        raise RuntimeError("Missing Gmail closure labels: " + ", ".join(missing))
+    return {outcome: by_name[name.casefold()] for outcome, name in names.items()}
 
 
 def ensure_upfluence_reply_label(gmail, gmail_labels, config_rows):

@@ -26,6 +26,12 @@ def run_script(name):
 
 
 def cycle():
+    # A closing label takes priority over every live tracking label. Process it
+    # before reading Needs Review or rebuilding Active Track.
+    closure_result = run_script("process_closed.py")
+    if closure_result:
+        print("Closure processing failed; skipping this cycle to preserve Active rows", flush=True)
+        return False
     # Observe removals first so the inquiry scanner cannot restore a label
     # that a team member just removed.
     monitor_result = run_script("monitor_needs_review.py")

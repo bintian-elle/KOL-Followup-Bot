@@ -13,6 +13,7 @@ PURPOSES = {
     "needs_review_monitor": "Needs Review membership and manually removed threads that must not be re-added",
     "needs_review_scan": "Incremental Gmail scan checkpoint",
     "daily_digest": "Daily Digest snapshot, last-send date, route, and Slack delivery receipt",
+    "closed_threads": "Completed and Not Moving Forward threads already processed",
 }
 
 
