@@ -33,7 +33,9 @@ When `Testing developer` is active, only that configured user is authorized and 
 4. Enable the **Home Tab**. The worker publishes command help and the Sheet link with `views.publish`.
 5. Under **Socket Mode**, enable Socket Mode.
 6. Under **Basic Information → App-Level Tokens**, create a token with `connections:write` and put its `xapp-...` value in `.env` as `SLACK_APP_TOKEN`.
-7. Under **Event Subscriptions → Subscribe to bot events**, add `message.im`.
+7. Under **Event Subscriptions → Subscribe to bot events**, add `message.im` and
+   `app_home_opened`. The second event publishes the current Home instructions
+   whenever any existing or new workspace member opens the bot Home tab.
 8. Restart the EC2 worker after updating the tokens.
 
 No public Slack webhook or Request URL is needed because Socket Mode carries the events over the persistent outbound connection.

@@ -19,6 +19,7 @@ from sync_needs_review import call
 from sync_reach_out import HEADER as REACH_HEADER, TAB as REACH_TAB
 from gmail_active_labels import resolve_active_labels
 from rm_audit import append_batch, ensure_tab, mark_batch_removed
+from publish_slack_home import home_view
 
 
 def socket_url(app_token):
@@ -81,6 +82,15 @@ class CommandHandler:
         return config
 
     def handle(self, event):
+        if event.get("type") == "app_home_opened":
+            user_id = event.get("user", "")
+            if user_id:
+                slack_call(self.bot_token, "views.publish", {
+                    "user_id": user_id,
+                    "view": home_view(self.sheet_id),
+                })
+                print(f"Published Slack Home on open for {user_id}", flush=True)
+            return
         if event.get("channel_type") != "im" or event.get("subtype") or event.get("bot_id"):
             return
         user_id = event.get("user", "")
