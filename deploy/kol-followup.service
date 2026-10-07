@@ -6,8 +6,8 @@ After=network-online.target
 [Service]
 Type=simple
 User=ubuntu
-WorkingDirectory=/home/ubuntu/KOL-Followup-Bot
-ExecStart=/home/ubuntu/KOL-Followup-Bot/.venv/bin/python run_bot.py
+WorkingDirectory=/home/ubuntu/work/bintian/KOLFollowup
+ExecStart=/home/ubuntu/work/bintian/KOLFollowup/.venv/bin/python /home/ubuntu/work/bintian/KOLFollowup/run_bot.py
 Environment=PYTHONUNBUFFERED=1
 Restart=always
 RestartSec=5
