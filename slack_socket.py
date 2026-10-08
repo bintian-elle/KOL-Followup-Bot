@@ -75,10 +75,10 @@ class CommandHandler:
         developer = next((row for row in config if cell(row, 0) == "Testing developer"), None)
         if not developer:
             raise RuntimeError("Testing developer Config row missing")
-        developer_mode = truth(cell(developer, 2))
-        self.authorized = ({cell(developer, 3)} if developer_mode
-                           else {member["slack_id"] for member in members if member["active"]})
-        self.authorized.discard("")
+        self.developer_mode = truth(cell(developer, 2))
+        self.developer_id = cell(developer, 3)
+        if self.developer_mode and not self.developer_id:
+            raise RuntimeError("Testing developer is active but its Slack ID is empty")
         return config
 
     def handle(self, event):
@@ -98,11 +98,13 @@ class CommandHandler:
         self.refresh_authorized()
         if command not in ("rm", "summary", "task"):
             return
+        print(f"Received Slack command {command!r} from {user_id}", flush=True)
+        # Testing mode must not send any command response to another user.
+        if self.developer_mode and user_id != self.developer_id:
+            return
         if command == "rm" and user_id not in self.rm_authorized:
-            return
-        if command != "rm" and user_id not in self.authorized:
-            return
-        if command == "rm":
+            response = "You do not have permission to use `rm`. Only Shanshan and Candice can run it."
+        elif command == "rm":
             thread_ids = list_label_threads(self.gmail, self.review_id)
             snapshots = []
             for thread_id in thread_ids:
@@ -134,7 +136,7 @@ class CommandHandler:
             if not active_rows or active_rows[0] != HEADER or not reach_rows or reach_rows[0] != REACH_HEADER:
                 raise RuntimeError("Track columns changed; refusing summary")
             response = summary_text(active_rows, reach_rows, len(list_label_threads(self.gmail, self.review_id)), self.sheet_id)
-        else:
+        elif command == "task":
             active_rows = call(self.sheets.values().get(spreadsheetId=self.sheet_id, range=f"'{TAB}'!A1:L10000")).get("values", [])
             if not active_rows or active_rows[0] != HEADER:
                 raise RuntimeError("Active Track columns changed; refusing task lookup")

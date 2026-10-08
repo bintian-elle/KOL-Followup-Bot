@@ -23,7 +23,10 @@ Commands must be the entire message, ignoring surrounding spaces and letter case
 The two closure labels remove the thread from Active Track and record it in
 `Closed_Track`. They do not delete or archive the email.
 
-When `Testing developer` is active, only that configured user is authorized and replies go only to that DM. When it is inactive, active Team rotation members are authorized and each response returns to the requesting member's DM.
+When `Testing developer` is active, only that configured user receives command
+responses. When it is inactive, any workspace member may request `summary`,
+configured Team rotation members may request `task` even while inactive in the
+rotation, and only Shanshan or Candice may run `rm`.
 
 ## Slack app setup
 
