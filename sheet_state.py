@@ -8,6 +8,7 @@ TAB = "Bot_State"
 HEADER = ["Namespace", "Purpose", "JSON Value", "Updated At"]
 PURPOSES = {
     "assignment_slack_sent": "New-task Slack delivery receipts; allows retry when assignment saved but Slack failed",
+    "assignment_gmail_labels": "One-time member Gmail labels applied from Sheet assignments",
     "reply_reminders_sent": "One-time 24-hour reminder receipts for each KOL reply",
     "reach_out_replies": "First-reply progress for moving Reach Out threads directly into Active tracking",
     "reach_out_scan": "Last successful incremental scan for new Upfluence outreach",

@@ -14,8 +14,12 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from google.auth.transport.requests import Request
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from gmail_active_labels import resolve_active_labels
 from sheet_state import SheetState
 
 
@@ -28,6 +32,7 @@ COLORS = [
     (1.00, 0.91, 0.75),  # Ivan: orange
     (0.93, 0.86, 0.98),  # Tina: purple
     (1.00, 0.86, 0.89),  # Jason: pink
+    (1.00, 0.96, 0.72),  # Jen: yellow
 ]
 
 
@@ -108,6 +113,29 @@ def slack_text(row, owner):
     return f"{mention} New KOL task\nKOL: {name} <{email}>\nSubject: {subject}\nGmail: {link}"
 
 
+def gmail_call(request):
+    for attempt in range(8):
+        try:
+            return request.execute()
+        except HttpError as exc:
+            if exc.resp.status not in (403, 429, 500, 502, 503) or attempt == 7:
+                raise
+            time.sleep(min(2 ** attempt, 30))
+
+
+def label_thread_ids(gmail, label_id):
+    thread_ids = set()
+    token = None
+    while True:
+        page = gmail_call(gmail.threads().list(
+            userId="me", labelIds=[label_id], maxResults=500, pageToken=token,
+        ))
+        thread_ids.update(item["id"] for item in page.get("threads", []))
+        token = page.get("nextPageToken")
+        if not token:
+            return thread_ids
+
+
 def ensure_colors(sheets, spreadsheet_id, tab_id, members, rules):
     existing = {
         rule.get("booleanRule", {}).get("condition", {}).get("values", [{}])[0].get("userEnteredValue")
@@ -127,9 +155,64 @@ def ensure_colors(sheets, spreadsheet_id, tab_id, members, rules):
         sheets.batchUpdate(spreadsheetId=spreadsheet_id, body={"requests": requests}).execute()
 
 
+def sync_assignment_labels(gmail, gmail_labels, config, rows, state, dry_run=False):
+    """Apply each Sheet assignment to Gmail once; later manual edits win."""
+    active = resolve_active_labels(gmail_labels, config)
+    member_ids = {label_id for label_id, owner in active["owner_by_label_id"].items() if owner}
+    label_by_owner = {
+        owner.casefold(): label_id for label_id, owner in active["owner_by_label_id"].items() if owner
+    }
+    label_name = {item["id"]: item["name"] for item in gmail_labels}
+    threads_by_member_label = {
+        label_id: label_thread_ids(gmail, label_id) for label_id in member_ids
+    }
+    ledger = state.load("assignment_gmail_labels", {})
+    ledger_changed = False
+    changed = 0
+    skipped_manual = 0
+    for row in rows[1:]:
+        thread_id, owner = cell(row, 0), cell(row, 8)
+        if not thread_id or not owner or thread_id in ledger:
+            continue
+        target_id = label_by_owner.get(owner.casefold())
+        if not target_id:
+            print(f"No Gmail member label for assigned owner {owner!r}; skipped {thread_id}", flush=True)
+            continue
+        current_members = {label_id for label_id, thread_ids in threads_by_member_label.items()
+                           if thread_id in thread_ids}
+        if target_id in current_members:
+            result = "already_present"
+        elif current_members:
+            result = "manual_override"
+            skipped_manual += 1
+        else:
+            result = "would_add" if dry_run else "added"
+            if not dry_run:
+                gmail_call(gmail.threads().modify(
+                    userId="me", id=thread_id, body={"addLabelIds": [target_id]},
+                ))
+                threads_by_member_label[target_id].add(thread_id)
+            changed += 1
+        print(f"Assignment Gmail label: {thread_id}: {owner}: {result}", flush=True)
+        if dry_run:
+            continue
+        ledger[thread_id] = {
+            "owner": owner,
+            "label": label_name[target_id],
+            "result": result,
+            "recorded_at": datetime.utcnow().isoformat() + "Z",
+        }
+        ledger_changed = True
+    if ledger_changed:
+        state.save("assignment_gmail_labels", ledger)
+    print(f"Assignment Gmail labels added: {changed}; manual overrides preserved: {skipped_manual}", flush=True)
+    return changed, skipped_manual
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="show assignment plan without writing or sending")
+    parser.add_argument("--labels-only", action="store_true", help="sync assigned owners to Gmail labels without assigning or sending Slack")
     args = parser.parse_args()
     load_env()
     spreadsheet_id = os.environ["GOOGLE_SHEET_ID"]
@@ -156,10 +239,10 @@ def main():
     planned = next_assignments(members, rows)
     for number, row, owner in planned:
         print(f"Row {number}: {cell(row, 0)} -> {owner['name']}", flush=True)
-    if args.dry_run:
+    if args.dry_run and not args.labels_only:
         return
     ledger = state.load("assignment_slack_sent", {})
-    if planned:
+    if planned and not args.labels_only:
         assigned_at = datetime.now(timezone).strftime("%Y-%m-%d %H:%M:%S %Z")
         last_owner = planned[-1][2]
         updates = [{"range": f"'{TAB}'!I{number}:J{number}", "values": [[owner["name"], assigned_at]]}
@@ -172,6 +255,18 @@ def main():
             while len(row) < 10:
                 row.append("")
             row[8:10] = [owner["name"], assigned_at]
+    gmail_credentials = Credentials(
+        None, refresh_token=os.environ["GMAIL_REFRESH_TOKEN"],
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=os.environ["GMAIL_CLIENT_ID"], client_secret=os.environ["GMAIL_CLIENT_SECRET"],
+        scopes=["https://www.googleapis.com/auth/gmail.modify"],
+    )
+    gmail_credentials.refresh(Request())
+    gmail = build("gmail", "v1", credentials=gmail_credentials, cache_discovery=False).users()
+    gmail_labels = gmail_call(gmail.labels().list(userId="me")).get("labels", [])
+    sync_assignment_labels(gmail, gmail_labels, config, rows, state, dry_run=args.dry_run)
+    if args.labels_only or args.dry_run:
+        return
     metadata = sheets.get(spreadsheetId=spreadsheet_id,
                           fields="sheets(properties(sheetId,title),conditionalFormats)").execute()
     tab = next(item for item in metadata["sheets"] if item["properties"]["title"] == TAB)

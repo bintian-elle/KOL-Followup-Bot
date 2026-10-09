@@ -101,7 +101,7 @@ def counterpart(thread, internal):
 
 
 def clear_notification_state(state_store, thread_id):
-    for namespace in ("assignment_slack_sent", "reply_reminders_sent"):
+    for namespace in ("assignment_slack_sent", "assignment_gmail_labels", "reply_reminders_sent"):
         state = state_store.load(namespace, {})
         if thread_id in state:
             state.pop(thread_id)

@@ -19,6 +19,8 @@ ongoing work, and sends Slack notifications and daily summaries.
   tracking and record the outcome in `Closed_Track`.
 - Route eligible unanswered inbound inquiries to `01_Needs Review`.
 - Assign new Active tasks in Config round robin order.
+- Add the assigned member's Gmail label once. Later manual label changes take
+  priority and are not automatically reversed.
 - Send one reminder when a `Needs Reply` task passes 24 hours.
 - Send the Daily Digest at `daily_send_time` in the configured `timezone`.
 - Handle Slack DM commands immediately over Socket Mode.
