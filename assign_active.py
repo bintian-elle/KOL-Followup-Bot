@@ -33,6 +33,7 @@ COLORS = [
     (0.93, 0.86, 0.98),  # Tina: purple
     (1.00, 0.86, 0.89),  # Jason: pink
     (1.00, 0.96, 0.72),  # Jen: yellow
+    (0.78, 0.94, 0.93),  # Candice: teal
 ]
 
 
@@ -142,7 +143,8 @@ def ensure_colors(sheets, spreadsheet_id, tab_id, members, rules):
         for rule in rules if rule.get("booleanRule", {}).get("condition", {}).get("values")
     }
     requests = []
-    for member, color in zip(members, COLORS):
+    for index, member in enumerate(members):
+        color = COLORS[index % len(COLORS)]
         formula = f'=$I2="{member["name"]}"'
         if formula in existing:
             continue
