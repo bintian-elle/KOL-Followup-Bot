@@ -64,6 +64,23 @@ def words(value):
     return [word.strip().casefold() for word in value.split(",") if word.strip()]
 
 
+def brand_team_domains(config):
+    return [domain.lstrip("@").strip().casefold()
+            for domain in words(config.get("brand_team_domains", "")) if domain.lstrip("@").strip()]
+
+
+def is_brand_team_sender(sender, config):
+    sender = sender.strip().casefold()
+    if sender in set(words(config.get("brand_team_emails", ""))):
+        return True
+    return any(sender.endswith("@" + domain) for domain in brand_team_domains(config))
+
+
+def handoff_search_sources(config):
+    sources = words(config.get("brand_team_emails", "") + "," + config.get("forwarding_mailbox", ""))
+    return list(dict.fromkeys(sources + brand_team_domains(config)))
+
+
 def first_headers(message):
     return {header["name"].lower(): header["value"] for header in message["payload"].get("headers", [])}
 
@@ -82,9 +99,8 @@ def creator_inquiry(thread, config, active_labels, review_label, scan_start_ms):
     if any(sender.endswith("@elle-media.com") for sender in senders):
         return False, "team already replied"
     first_sender = senders[0]
-    brand_team = set(words(config.get("brand_team_emails", "")))
     forwarding = config.get("forwarding_mailbox", "").strip().casefold()
-    handoff = first_sender in brand_team or first_sender == forwarding
+    handoff = is_brand_team_sender(first_sender, config) or first_sender == forwarding
     first = messages[0]
     subject = headers[0].get("subject", "")
     text = (subject + " " + first.get("snippet", "")).casefold()
@@ -175,7 +191,7 @@ def main():
         subject_terms = " ".join('subject:"' + term + '"' for term in generic)
         brand = config.get("campaign_name_contains", "Bluevua").strip()
         date = f"after:{since}"
-        handoff_sources = words(config.get("brand_team_emails", "") + "," + config.get("forwarding_mailbox", ""))
+        handoff_sources = handoff_search_sources(config)
         queries = [
             "in:anywhere " + date + " -in:sent {" + brand + " " + subject_terms + "}",
             f'in:anywhere {date} {{' + " ".join(f'from:{address}' for address in handoff_sources) + "}",
