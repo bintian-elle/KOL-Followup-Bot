@@ -11,6 +11,7 @@ PURPOSES = {
     "assignment_gmail_labels": "One-time member Gmail labels applied from Sheet assignments",
     "reply_reminders_sent": "One-time 24-hour reminder receipts for each KOL reply",
     "reach_out_replies": "First-reply progress for moving Reach Out threads directly into Active tracking",
+    "reach_out_reply_scan": "Last successful incremental scan for replies to tracked Upfluence outreach",
     "reach_out_scan": "Last successful incremental scan for new Upfluence outreach",
     "needs_review_monitor": "Needs Review membership and manually removed threads that must not be re-added",
     "needs_review_scan": "Incremental Gmail scan checkpoint",

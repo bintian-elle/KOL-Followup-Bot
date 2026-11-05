@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import time
 from datetime import datetime, timezone
 from email.utils import parseaddr
 
@@ -13,7 +14,25 @@ from googleapiclient.discovery import build
 from assign_active import ROOT, cell, load_env
 from sheet_state import SheetState
 from gmail_active_labels import ensure_upfluence_reply_label, resolve_active_labels
-from sync_reach_out import HEADER, TAB, address_not_found, call, first_human_reply, route_complete
+from sync_reach_out import (HEADER, TAB, address_not_found, call, first_human_reply,
+                            list_messages, route_complete)
+
+
+def reply_scan_start(checkpoint, scan_started):
+    """Return a safe query boundary and whether all tracked threads need inspection."""
+    previous = checkpoint.get("last_successful_scan_started")
+    if previous:
+        return max(0, int(previous) - 300), False
+    return 0, True
+
+
+def candidate_thread_ids(tracked_ids, recent_messages, full_scan):
+    """Limit incremental Gmail results to conversations still awaiting a first reply."""
+    tracked = set(tracked_ids)
+    if full_scan:
+        return tracked
+    recent = {item["threadId"] for item in recent_messages if item.get("threadId")}
+    return tracked & recent
 
 
 def main():
@@ -34,6 +53,9 @@ def main():
     if not rows or rows[0] != HEADER:
         raise RuntimeError("Reach Out Track columns changed; refusing transition")
     state = sheet_state.load("reach_out_replies", {})
+    checkpoint = sheet_state.load("reach_out_reply_scan", {})
+    scan_started = int(time.time())
+    since, full_scan = reply_scan_start(checkpoint, scan_started)
 
     credentials = Credentials(
         None, refresh_token=os.environ["GMAIL_REFRESH_TOKEN"], token_uri="https://oauth2.googleapis.com/token",
@@ -52,11 +74,15 @@ def main():
     internal = {settings["gmail_mailbox"].strip().lower(), "partnerships@bluevua.com", "pr@bluevua.com"}
     internal.update(address.strip().lower() for address in settings.get("brand_team_emails", "").split(","))
 
+    tracked_rows = {cell(row, 0): (row_number, row)
+                    for row_number, row in enumerate(rows[1:], 2) if cell(row, 0)}
+    recent_messages = [] if full_scan else list_messages(gmail, f"in:anywhere after:{since}")
+    candidates = candidate_thread_ids(tracked_rows, recent_messages, full_scan)
+    mode = "full" if full_scan else "incremental"
+    print(f"Reach Out reply scan: {mode}; candidates: {len(candidates)}", flush=True)
     status_updates = []
-    for row_number, row in enumerate(rows[1:], 2):
-        thread_id = cell(row, 0)
-        if not thread_id:
-            continue
+    for thread_id in sorted(candidates):
+        row_number, row = tracked_rows[thread_id]
         thread = call(gmail.threads().get(userId="me", id=thread_id, format="metadata", metadataHeaders=["From", "Subject"]))
         conversation = sorted(thread["messages"], key=lambda item: int(item["internalDate"]))
         if address_not_found(conversation) and cell(row, 6).casefold() != "address not found":
@@ -88,20 +114,26 @@ def main():
     pending = [(thread_id, event) for thread_id, event in state.items() if not route_complete(event)]
     if not pending:
         print("No pending Reach Out reply transitions", flush=True)
-        return
-    for thread_id, event in pending:
-        if not event["labeled"]:
-            thread = call(gmail.threads().get(userId="me", id=thread_id, format="minimal"))
-            current_labels = {label for message in thread["messages"] for label in message.get("labelIds", [])}
-            body = {"addLabelIds": [] if upfluence_reply_id in current_labels else [upfluence_reply_id],
-                    "removeLabelIds": [review_id] if review_id in current_labels else []}
-            if body["addLabelIds"] or body["removeLabelIds"]:
-                call(gmail.threads().modify(userId="me", id=thread_id, body=body))
-            event["labeled"] = True
-            event["destination"] = "active"
-            event["completed_at"] = datetime.now(timezone.utc).isoformat()
-            sheet_state.save("reach_out_replies", state)
-            print(f"Moved replied Reach Out directly to Active: {thread_id}", flush=True)
+    else:
+        for thread_id, event in pending:
+            if not event["labeled"]:
+                thread = call(gmail.threads().get(userId="me", id=thread_id, format="minimal"))
+                current_labels = {label for message in thread["messages"] for label in message.get("labelIds", [])}
+                body = {"addLabelIds": [] if upfluence_reply_id in current_labels else [upfluence_reply_id],
+                        "removeLabelIds": [review_id] if review_id in current_labels else []}
+                if body["addLabelIds"] or body["removeLabelIds"]:
+                    call(gmail.threads().modify(userId="me", id=thread_id, body=body))
+                event["labeled"] = True
+                event["destination"] = "active"
+                event["completed_at"] = datetime.now(timezone.utc).isoformat()
+                sheet_state.save("reach_out_replies", state)
+                print(f"Moved replied Reach Out directly to Active: {thread_id}", flush=True)
+
+    sheet_state.save("reach_out_reply_scan", {
+        "last_successful_scan_started": scan_started,
+        "last_successful_scan_at": datetime.fromtimestamp(scan_started, timezone.utc).isoformat(),
+        "mode": mode,
+    })
 
 
 if __name__ == "__main__":
