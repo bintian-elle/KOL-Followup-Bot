@@ -1,7 +1,9 @@
 """Reliable Gmail Watch, Pub/Sub, and History API synchronization primitives."""
 
 import base64
+import hashlib
 import json
+import threading
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, Iterable, List, Tuple
 
@@ -10,6 +12,51 @@ from googleapiclient.errors import HttpError
 
 class HistoryCursorExpired(RuntimeError):
     """The stored Gmail history cursor can no longer be incrementally resumed."""
+
+
+class ClientRegistry:
+    """Build each long-lived API client once per process."""
+
+    def __init__(self):
+        self._clients = {}
+        self._lock = threading.Lock()
+
+    def get(self, name, builder):
+        with self._lock:
+            if name not in self._clients:
+                self._clients[name] = builder()
+            return self._clients[name]
+
+
+class TriggerQueue:
+    """Coalesce trigger types while allowing only one processing batch."""
+
+    def __init__(self):
+        self._pending = set()
+        self._running = False
+        self._lock = threading.Lock()
+
+    def enqueue(self, trigger):
+        with self._lock:
+            self._pending.add(trigger)
+
+    def begin(self):
+        with self._lock:
+            if self._running or not self._pending:
+                return None
+            self._running = True
+            triggers = set(self._pending)
+            self._pending.clear()
+            return triggers
+
+    def finish(self):
+        with self._lock:
+            self._running = False
+
+
+def config_fingerprint(rows):
+    payload = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 @dataclass(frozen=True)
