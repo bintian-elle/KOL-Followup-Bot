@@ -6,6 +6,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 from assign_active import ROOT, cell, load_env, slack_call, team_from_config, truth
+from runtime_config import load_config_rows
 
 
 def home_view(sheet_id):
@@ -52,7 +53,7 @@ def main():
     )
     sheets = build("sheets", "v4", credentials=credentials, cache_discovery=False).spreadsheets()
     values = sheets.values()
-    config = values.get(spreadsheetId=sheet_id, range="'Config'!A1:E100").execute().get("values", [])
+    config = load_config_rows(sheets, sheet_id)
     users = home_users(config)
     view = home_view(sheet_id)
     token = os.environ.get("SLACK_BOT_TOKEN", "")

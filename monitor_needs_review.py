@@ -14,6 +14,7 @@ from googleapiclient.discovery import build
 
 from sync_needs_review import ROOT, call, load_env
 from sheet_state import SheetState
+from runtime_config import load_config_rows
 from gmail_active_labels import resolve_active_labels
 
 
@@ -48,7 +49,7 @@ def main():
     )
     sheets = build("sheets", "v4", credentials=sheet_credentials, cache_discovery=False).spreadsheets()
     state_store = SheetState(sheets, os.environ["GOOGLE_SHEET_ID"])
-    rows = call(sheets.values().get(spreadsheetId=os.environ["GOOGLE_SHEET_ID"], range="'Config'!A1:E100")).get("values", [])
+    rows = load_config_rows(sheets, os.environ["GOOGLE_SHEET_ID"])
     config = {row[0]: row[1] for row in rows if len(row) > 1}
 
     credentials = Credentials(

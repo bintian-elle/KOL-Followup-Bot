@@ -18,6 +18,7 @@ from googleapiclient.discovery import build
 from assign_active import HEADER as ACTIVE_HEADER, ROOT, TAB as ACTIVE_TAB, cell, load_env
 from gmail_active_labels import closed_label_names, resolve_active_labels, resolve_closed_labels
 from sheet_state import SheetState
+from runtime_config import load_config_rows
 from sync_needs_review import call
 
 
@@ -116,9 +117,7 @@ def main():
         scopes=["https://www.googleapis.com/auth/spreadsheets"],
     )
     sheets = build("sheets", "v4", credentials=sheet_credentials, cache_discovery=False).spreadsheets()
-    config_rows = call(sheets.values().get(
-        spreadsheetId=spreadsheet_id, range="'Config'!A1:E100",
-    )).get("values", [])
+    config_rows = load_config_rows(sheets, spreadsheet_id)
     settings = {cell(row, 0): cell(row, 1) for row in config_rows if len(row) > 1}
     timezone = ZoneInfo(settings.get("timezone", "America/Los_Angeles"))
     active_rows = call(sheets.values().get(

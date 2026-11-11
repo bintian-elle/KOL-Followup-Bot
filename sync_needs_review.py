@@ -20,6 +20,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from sheet_state import SheetState
+from runtime_config import load_config_rows
 from gmail_active_labels import resolve_active_labels
 
 
@@ -56,7 +57,7 @@ def list_thread_ids(gmail, query):
 
 
 def settings(sheets, spreadsheet_id):
-    rows = call(sheets.values().get(spreadsheetId=spreadsheet_id, range="'Config'!A1:E100")).get("values", [])
+    rows = load_config_rows(sheets, spreadsheet_id)
     return rows, {row[0]: row[1] for row in rows if len(row) > 1}
 
 

@@ -27,6 +27,15 @@ class RuntimeScheduleTests(unittest.TestCase):
         self.assertGreater(schedule.next_history_catchup, 90000.0)
         self.assertGreater(schedule.next_full_reconciliation, 90000.0)
 
+    def test_restart_preserves_remaining_time_until_daily_reconciliation(self):
+        schedule = run_bot.RuntimeSchedule.restored_at(
+            monotonic_now=500.0,
+            wall_now=1000.0 + 23 * 60 * 60,
+            runtime_state={"last_full_reconciliation_epoch": 1000.0},
+        )
+
+        self.assertEqual(500.0 + 60 * 60, schedule.next_full_reconciliation)
+
 
 class RuntimePrimitiveTests(unittest.TestCase):
     def test_trigger_queue_coalesces_duplicates_and_serializes_new_work(self):
@@ -54,6 +63,18 @@ class RuntimePrimitiveTests(unittest.TestCase):
         first = config_fingerprint([["a", "1"], ["b", "2"]])
         self.assertEqual(first, config_fingerprint([["a", "1"], ["b", "2"]]))
         self.assertNotEqual(first, config_fingerprint([["a", "1"], ["b", "3"]]))
+
+    def test_round_robin_runtime_flag_does_not_look_like_a_config_change(self):
+        before = [
+            ["Team rotation"],
+            ["Member", "Email", "Slack", "Active", "last_round_robin_owner"],
+            ["Dan", "d@example.com", "U1", "TRUE", "TRUE"],
+            ["Ivan", "i@example.com", "U2", "TRUE", "FALSE"],
+        ]
+        after = [row[:] for row in before]
+        after[2][4], after[3][4] = "FALSE", "TRUE"
+
+        self.assertEqual(config_fingerprint(before), config_fingerprint(after))
 
 
 class PipelineTests(unittest.TestCase):

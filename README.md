@@ -5,7 +5,12 @@ ongoing work, and sends Slack notifications and daily summaries.
 
 ## Main workflow
 
-- Scan Gmail every minute.
+- Receive Gmail mailbox changes through Gmail Watch and Pub/Sub StreamingPull.
+- Process message and label changes from a durable Gmail `historyId` cursor.
+- Run a History API safety catch-up every 30 minutes and a complete Gmail/Sheet
+  reconciliation every 24 hours.
+- Cache the Sheet `Config` tab and refresh it every 2 hours. Bot-written round
+  robin changes update the local cache immediately.
 - Keep `Bluevua_KOL_Active_Track` synchronized with the Active parent label and
   configured member child labels.
 - Give member child labels priority over round robin Sheet assignments.
@@ -63,8 +68,38 @@ Run the continuous worker used on EC2:
 
 The systemd unit template is in `deploy/kol-followup.service`.
 
+## Gmail Watch and Pub/Sub
+
+The continuous worker requires a Pub/Sub topic and pull subscription in the
+same Google Cloud project as the Gmail OAuth client. EC2 uses StreamingPull, so
+it does not expose an HTTPS webhook or require an inbound firewall port.
+
+Create the resources and permissions once:
+
+```bash
+gcloud services enable pubsub.googleapis.com gmail.googleapis.com --project PROJECT_ID
+gcloud pubsub topics create kol-followup-gmail --project PROJECT_ID
+gcloud pubsub subscriptions create kol-followup-gmail-ec2 \
+  --topic kol-followup-gmail --project PROJECT_ID
+gcloud pubsub topics add-iam-policy-binding kol-followup-gmail \
+  --project PROJECT_ID \
+  --member serviceAccount:gmail-api-push@system.gserviceaccount.com \
+  --role roles/pubsub.publisher
+gcloud pubsub subscriptions add-iam-policy-binding kol-followup-gmail-ec2 \
+  --project PROJECT_ID \
+  --member serviceAccount:YOUR_BOT_SERVICE_ACCOUNT \
+  --role roles/pubsub.subscriber
+```
+
+Set `GMAIL_PUBSUB_TOPIC` and `GMAIL_PUBSUB_SUBSCRIPTION` in `.env` to the
+fully-qualified resource names. The bot renews Gmail Watch at startup and once
+per day. Pub/Sub notifications only wake the worker; `history.list` remains the
+source of truth, so duplicate or lost notifications are safe. An expired
+history cursor automatically triggers a complete reconciliation.
+
 ## Runtime state
 
-Delivery receipts, Gmail scan checkpoints, Needs Review suppression, and Daily
-Digest snapshots are stored in the visible `Bot_State` Sheet tab. This lets the
-EC2 worker restart without repeating completed notifications.
+Delivery receipts, the committed Gmail history cursor, Watch expiration,
+notification receipts, Needs Review suppression, and Daily Digest snapshots are
+stored in the visible `Bot_State` Sheet tab. This lets the EC2 worker restart
+without skipping mailbox history or repeating completed notifications.

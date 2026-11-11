@@ -21,6 +21,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from gmail_active_labels import resolve_active_labels
 from sheet_state import SheetState
+from runtime_config import apply_config_updates, load_config_rows, save_config_rows
 
 
 ROOT = Path(__file__).resolve().parent
@@ -224,7 +225,7 @@ def main():
     )
     sheets = build("sheets", "v4", credentials=credentials, cache_discovery=False).spreadsheets()
     state = SheetState(sheets, spreadsheet_id)
-    config = sheets.values().get(spreadsheetId=spreadsheet_id, range="'Config'!A1:E100").execute().get("values", [])
+    config = load_config_rows(sheets, spreadsheet_id)
     members = team_from_config(config)
     developer_rows = [r for r in config if cell(r, 0) == "Testing developer"]
     if len(developer_rows) != 1:
@@ -253,6 +254,9 @@ def main():
                        for member in members)
         sheets.values().batchUpdate(spreadsheetId=spreadsheet_id,
                                     body={"valueInputOption": "RAW", "data": updates}).execute()
+        cache_updates = [(member["row"], 4, "TRUE" if member is last_owner else "FALSE")
+                         for member in members]
+        save_config_rows(apply_config_updates(config, cache_updates))
         for number, row, owner in planned:
             while len(row) < 10:
                 row.append("")

@@ -15,6 +15,7 @@ from googleapiclient.discovery import build
 
 from assign_active import HEADER, ROOT, TAB, cell, load_env, slack_call, team_from_config, truth
 from sheet_state import SheetState
+from runtime_config import load_config_rows
 
 
 def reply_instant(value, local_tz):
@@ -57,7 +58,7 @@ def main():
     )
     sheets = build("sheets", "v4", credentials=credentials, cache_discovery=False).spreadsheets()
     state = SheetState(sheets, spreadsheet_id)
-    config = sheets.values().get(spreadsheetId=spreadsheet_id, range="'Config'!A1:E100").execute().get("values", [])
+    config = load_config_rows(sheets, spreadsheet_id)
     members = {member["name"]: member for member in team_from_config(config)}
     developer_rows = [row for row in config if cell(row, 0) == "Testing developer"]
     if len(developer_rows) != 1:

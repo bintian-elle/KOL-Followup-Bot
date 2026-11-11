@@ -20,6 +20,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from sheet_state import SheetState
+from runtime_config import load_config_rows
 
 
 
@@ -120,7 +121,7 @@ def main():
     )
     sheets = build("sheets", "v4", credentials=sheet_credentials, cache_discovery=False).spreadsheets()
     state = SheetState(sheets, sheet_id)
-    config_rows = call(sheets.values().get(spreadsheetId=sheet_id, range="'Config'!A1:B100")).get("values", [])
+    config_rows = load_config_rows(sheets, sheet_id)
     config = {row[0]: row[1] for row in config_rows if len(row) > 1}
     tz = ZoneInfo(config.get("timezone", "America/Los_Angeles"))
     start = datetime.strptime(config["gmail_scan_start_at"].strip(), "%Y-%m-%d").replace(tzinfo=tz)

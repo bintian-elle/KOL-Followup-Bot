@@ -16,6 +16,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 from gmail_active_labels import resolve_active_labels
+from runtime_config import load_config_rows
 
 
 ROOT = Path(__file__).resolve().parent
@@ -47,7 +48,7 @@ def main():
         str(service_file), scopes=["https://www.googleapis.com/auth/spreadsheets"]
     )
     sheets = build("sheets", "v4", credentials=sheet_credentials, cache_discovery=False).spreadsheets()
-    config_rows = sheets.values().get(spreadsheetId=sheet_id, range="'Config'!A1:E100").execute().get("values", [])
+    config_rows = load_config_rows(sheets, sheet_id)
     config = {row[0]: row[1] for row in config_rows if len(row) > 1}
     label_name = config["gmail_active_label"].strip()
     timezone = ZoneInfo(config.get("timezone", "America/Los_Angeles"))

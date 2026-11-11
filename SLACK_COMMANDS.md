@@ -45,7 +45,7 @@ No public Slack webhook or Request URL is needed because Socket Mode carries the
 
 ## Daily Digest
 
-The one-minute worker checks `daily_send_time` in the configured `timezone` and
+The five-minute maintenance worker checks `daily_send_time` in the configured `timezone` and
 sends no more than once per local calendar day. The digest includes current
 totals plus additions and removals since the previous digest snapshot. When
 `Testing developer` is active it is the primary recipient. Otherwise,

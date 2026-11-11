@@ -3,7 +3,11 @@
 import base64
 import hashlib
 import json
+import queue
 import threading
+import time
+from copy import deepcopy
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, Iterable, List, Tuple
 
@@ -12,6 +16,17 @@ from googleapiclient.errors import HttpError
 
 class HistoryCursorExpired(RuntimeError):
     """The stored Gmail history cursor can no longer be incrementally resumed."""
+
+
+def retry_execute(request_factory, attempts=6, sleeper=time.sleep):
+    """Execute a Google request with bounded exponential backoff."""
+    for attempt in range(attempts):
+        try:
+            return request_factory().execute()
+        except HttpError as exc:
+            if exc.resp.status not in (403, 429, 500, 502, 503, 504) or attempt == attempts - 1:
+                raise
+            sleeper(min(2 ** attempt, 30))
 
 
 class ClientRegistry:
@@ -54,8 +69,41 @@ class TriggerQueue:
             self._running = False
 
 
+class PubSubInbox:
+    """Move StreamingPull callbacks onto the serialized main worker thread."""
+
+    def __init__(self, wake_event=None):
+        self.messages = queue.Queue()
+        self.wake_event = wake_event or threading.Event()
+
+    def callback(self, message):
+        self.messages.put(message)
+        self.wake_event.set()
+
+    def drain(self, state_store, trigger_queue, expected_email):
+        accepted = 0
+        while True:
+            try:
+                message = self.messages.get_nowait()
+            except queue.Empty:
+                break
+            accepted += bool(handle_pubsub_message(
+                message, state_store, trigger_queue, expected_email,
+            ))
+        self.wake_event.clear()
+        return accepted
+
+
 def config_fingerprint(rows):
-    payload = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+    normalized = deepcopy(rows)
+    header = next((row for row in normalized if "last_round_robin_owner" in row), None)
+    if header:
+        column = header.index("last_round_robin_owner")
+        for row in normalized:
+            if (row is not header and len(row) > max(3, column)
+                    and str(row[3]).strip().casefold() in ("true", "false")):
+                row[column] = "<runtime>"
+    payload = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
@@ -91,14 +139,13 @@ def collect_history(gmail, start_history_id):
     page_token = None
     end_history_id = str(start_history_id)
     while True:
-        request = gmail.history().list(
-            userId="me",
-            startHistoryId=str(start_history_id),
-            maxResults=500,
-            pageToken=page_token,
-        )
         try:
-            page = request.execute()
+            page = retry_execute(lambda: gmail.history().list(
+                userId="me",
+                startHistoryId=str(start_history_id),
+                maxResults=500,
+                pageToken=page_token,
+            ))
         except HttpError as exc:
             if exc.resp.status == 404:
                 raise HistoryCursorExpired(str(start_history_id)) from exc
@@ -142,3 +189,100 @@ def decode_notification(encoded_data):
     """Decode the Gmail payload stored in Pub/Sub message.data."""
     padded = encoded_data + "=" * (-len(encoded_data) % 4)
     return json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+
+
+def decode_pubsub_data(data):
+    if isinstance(data, bytes):
+        return json.loads(data.decode())
+    return decode_notification(data)
+
+
+def handle_pubsub_message(message, state_store, trigger_queue, expected_email):
+    """Persist a receipt, enqueue work, then acknowledge a StreamingPull message."""
+    try:
+        payload = decode_pubsub_data(message.data)
+        if (not payload.get("historyId")
+                or payload.get("emailAddress", "").casefold() != expected_email.casefold()):
+            message.ack()
+            return False
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+        message.ack()
+        return False
+
+    watch_state = state_store.load("gmail_watch", {}) or {}
+    accepted, receipts = dedupe_notification_ids(
+        watch_state.get("notification_ids", []), message.message_id,
+    )
+    if not accepted:
+        message.ack()
+        return False
+    watch_state.update({
+        "notification_ids": receipts,
+        "latest_notification_history_id": str(payload["historyId"]),
+        "last_notification_at": datetime.now(timezone.utc).isoformat(),
+    })
+    state_store.save("gmail_watch", watch_state)
+    trigger_queue.enqueue("notification")
+    message.ack()
+    return True
+
+
+def subscriber_needs_restart(future):
+    return future is None or future.done()
+
+
+class EventRuntime:
+    """Own the durable Gmail cursor and serialize business pipeline commits."""
+
+    def __init__(self, gmail, state_store, pipeline, on_full_reconcile=None):
+        self.gmail = gmail
+        self.state_store = state_store
+        self.pipeline = pipeline
+        self.on_full_reconcile = on_full_reconcile or (lambda: None)
+
+    def _commit_cursor(self, history_id, trigger, changed):
+        self.state_store.save("gmail_event_cursor", {
+            "history_id": str(history_id),
+            "last_successful_sync_at": datetime.now(timezone.utc).isoformat(),
+            "last_trigger": trigger,
+            "last_batch_changed": bool(changed),
+        })
+
+    def _full_recovery(self, trigger):
+        baseline = retry_execute(lambda: self.gmail.getProfile(userId="me"))["historyId"]
+        if not self.pipeline():
+            return False
+        self.on_full_reconcile()
+        self._commit_cursor(baseline, trigger, True)
+        return True
+
+    def sync_history(self, trigger):
+        cursor = self.state_store.load("gmail_event_cursor", {}) or {}
+        history_id = cursor.get("history_id")
+        if not history_id:
+            return self._full_recovery("bootstrap")
+        try:
+            batch = collect_history(self.gmail, history_id)
+        except HistoryCursorExpired:
+            return self._full_recovery("history_cursor_expired")
+        if batch.changed and not self.pipeline():
+            return False
+        self._commit_cursor(batch.end_history_id, trigger, batch.changed)
+        return True
+
+    def full_reconcile(self, trigger="scheduled_full"):
+        return self._full_recovery(trigger)
+
+    def renew_watch(self, topic_name):
+        response = retry_execute(lambda: self.gmail.watch(
+            userId="me",
+            body={"topicName": topic_name},
+        ))
+        watch_state = self.state_store.load("gmail_watch", {}) or {}
+        watch_state.update({
+            "watch_history_id": str(response["historyId"]),
+            "expiration": str(response["expiration"]),
+            "renewed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        self.state_store.save("gmail_watch", watch_state)
+        return response

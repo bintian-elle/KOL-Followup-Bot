@@ -13,6 +13,7 @@ from googleapiclient.discovery import build
 
 from assign_active import HEADER, ROOT, TAB, cell, load_env, slack_call, truth
 from sheet_state import SheetState
+from runtime_config import load_config_rows
 from slack_commands import list_label_threads
 from sync_needs_review import call
 from sync_reach_out import HEADER as REACH_HEADER, TAB as REACH_TAB
@@ -84,7 +85,7 @@ def main():
     )
     sheets = build("sheets", "v4", credentials=credentials, cache_discovery=False).spreadsheets()
     state_store = SheetState(sheets, sheet_id)
-    config_rows = call(sheets.values().get(spreadsheetId=sheet_id, range="'Config'!A1:E100")).get("values", [])
+    config_rows = load_config_rows(sheets, sheet_id)
     settings = {cell(row, 0): cell(row, 1) for row in config_rows if len(row) > 1}
     local_tz = ZoneInfo(settings["timezone"].strip())
     now = datetime.now(local_tz)

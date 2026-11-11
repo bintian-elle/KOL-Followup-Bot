@@ -18,6 +18,7 @@ from slack_commands import list_label_threads, remove_all_review_labels, summary
 from sync_needs_review import call
 from sync_reach_out import HEADER as REACH_HEADER, TAB as REACH_TAB
 from gmail_active_labels import resolve_active_labels
+from runtime_config import load_config_rows
 from rm_audit import append_batch, ensure_tab, mark_batch_removed
 from publish_slack_home import home_view
 
@@ -63,7 +64,7 @@ class CommandHandler:
         self.bot_token = os.environ["SLACK_BOT_TOKEN"]
 
     def refresh_authorized(self):
-        config = call(self.sheets.values().get(spreadsheetId=self.sheet_id, range="'Config'!A1:E100")).get("values", [])
+        config = load_config_rows(self.sheets, self.sheet_id)
         members = team_from_config(config)
         self.member_by_slack_id = {member["slack_id"]: member for member in members if member["slack_id"]}
         shanshan = next((member for member in members if member["name"].casefold() == "shanshan"), None)

@@ -13,6 +13,7 @@ from googleapiclient.discovery import build
 
 from assign_active import ROOT, cell, load_env
 from sheet_state import SheetState
+from runtime_config import load_config_rows
 from gmail_active_labels import ensure_upfluence_reply_label, resolve_active_labels
 from sync_reach_out import (HEADER, TAB, address_not_found, call, first_human_reply,
                             list_messages, route_complete)
@@ -47,7 +48,7 @@ def main():
     )
     sheets = build("sheets", "v4", credentials=sheet_credentials, cache_discovery=False).spreadsheets()
     sheet_state = SheetState(sheets, sheet_id)
-    config = call(sheets.values().get(spreadsheetId=sheet_id, range="'Config'!A1:E100")).get("values", [])
+    config = load_config_rows(sheets, sheet_id)
     settings = {cell(row, 0): cell(row, 1) for row in config if len(row) > 1}
     rows = call(sheets.values().get(spreadsheetId=sheet_id, range=f"'{TAB}'!A1:H10000")).get("values", [])
     if not rows or rows[0] != HEADER:

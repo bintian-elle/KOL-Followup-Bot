@@ -11,6 +11,8 @@ credentials/
 .needs-review-monitor.json
 .needs-review-events.jsonl
 .bot-runner.lock
+.runtime-config.json
+.runtime-config.json.*
 .assignment-slack-sent.json
 .reply-reminders-sent.json
 .reach-out-replies.json
