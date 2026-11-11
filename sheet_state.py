@@ -17,6 +17,9 @@ PURPOSES = {
     "needs_review_scan": "Incremental Gmail scan checkpoint",
     "daily_digest": "Daily Digest snapshot, last-send date, route, and Slack delivery receipt",
     "closed_threads": "Completed and Not Moving Forward threads already processed",
+    "gmail_event_cursor": "Committed Gmail history cursor and successful event-sync timestamps",
+    "gmail_watch": "Gmail Watch history ID, expiration, renewal, and Pub/Sub notification receipts",
+    "gmail_event_runtime": "Event runtime health, Config fingerprint, and reconciliation timestamps",
 }
 
 
