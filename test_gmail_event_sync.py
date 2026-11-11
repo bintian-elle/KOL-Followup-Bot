@@ -181,6 +181,29 @@ class FakeFuture:
 
 
 class RuntimeRecoveryTests(unittest.TestCase):
+    def test_first_run_full_sync_uses_pre_sync_profile_as_replay_baseline(self):
+        class FirstRunGmail:
+            def getProfile(self, **kwargs):
+                events.append(("profile", "read"))
+                return FakeRequest({"historyId": "70"})
+
+        events = []
+        state = FakeState(events=events)
+        runtime = EventRuntime(
+            FirstRunGmail(),
+            state,
+            lambda: events.append(("pipeline", "full")) or True,
+        )
+
+        self.assertTrue(runtime.sync_history("startup"))
+
+        self.assertEqual([
+            ("profile", "read"),
+            ("pipeline", "full"),
+            ("save", "gmail_event_cursor"),
+        ], events)
+        self.assertEqual("70", state.values["gmail_event_cursor"]["history_id"])
+
     def test_transient_google_error_is_retried_with_a_bound(self):
         response = type("Response", (), {"status": 503, "reason": "Unavailable"})()
         attempts = [HttpError(response, b'{}'), HttpError(response, b'{}'), {"ok": True}]
@@ -214,6 +237,7 @@ class RuntimeRecoveryTests(unittest.TestCase):
 
         self.assertEqual([("pipeline", "event"), ("save", "gmail_event_cursor")], events)
         self.assertEqual("11", state.values["gmail_event_cursor"]["history_id"])
+        self.assertEqual(1, runtime.last_changed_threads)
 
     def test_pipeline_failure_does_not_advance_cursor(self):
         gmail = FakeGmail({None: {

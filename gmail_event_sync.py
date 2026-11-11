@@ -239,6 +239,7 @@ class EventRuntime:
         self.state_store = state_store
         self.pipeline = pipeline
         self.on_full_reconcile = on_full_reconcile or (lambda: None)
+        self.last_changed_threads = 0
 
     def _commit_cursor(self, history_id, trigger, changed):
         self.state_store.save("gmail_event_cursor", {
@@ -249,6 +250,7 @@ class EventRuntime:
         })
 
     def _full_recovery(self, trigger):
+        self.last_changed_threads = 0
         baseline = retry_execute(lambda: self.gmail.getProfile(userId="me"))["historyId"]
         if not self.pipeline():
             return False
@@ -265,6 +267,7 @@ class EventRuntime:
             batch = collect_history(self.gmail, history_id)
         except HistoryCursorExpired:
             return self._full_recovery("history_cursor_expired")
+        self.last_changed_threads = len(batch.thread_ids)
         if batch.changed and not self.pipeline():
             return False
         self._commit_cursor(batch.end_history_id, trigger, batch.changed)

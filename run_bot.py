@@ -2,6 +2,7 @@
 
 import argparse
 import fcntl
+import json
 import os
 import subprocess
 import sys
@@ -19,6 +20,7 @@ from googleapiclient.discovery import build
 from assign_active import load_env
 from gmail_event_sync import (ClientRegistry, EventRuntime, PubSubInbox, TriggerQueue,
                               config_fingerprint, subscriber_needs_restart)
+from event_sync_metrics import CountingHttp, RuntimeMetrics
 from runtime_config import load_config_rows
 from sheet_state import SheetState
 
@@ -30,6 +32,7 @@ FULL_RECONCILIATION_SECONDS = 24 * 60 * 60
 CONFIG_REFRESH_SECONDS = 2 * 60 * 60
 WATCH_RENEWAL_SECONDS = 24 * 60 * 60
 MAINTENANCE_SECONDS = 5 * 60
+RUNTIME_METRICS = None
 
 
 def _advance(deadline, interval, now):
@@ -92,6 +95,8 @@ class RuntimeSchedule:
 
 
 def run_script(name):
+    if RUNTIME_METRICS is not None:
+        RUNTIME_METRICS.record_worker(name)
     process = subprocess.Popen(
         [sys.executable, str(ROOT / name)], cwd=ROOT,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -136,7 +141,7 @@ def time_maintenance():
     return not any((reminder_result, digest_result))
 
 
-def build_clients():
+def build_clients(metrics):
     registry = ClientRegistry()
     service_file = ROOT / os.environ["GOOGLE_SERVICE_ACCOUNT_FILE"]
 
@@ -144,7 +149,9 @@ def build_clients():
         credentials = service_account.Credentials.from_service_account_file(
             str(service_file), scopes=["https://www.googleapis.com/auth/spreadsheets"],
         )
-        return build("sheets", "v4", credentials=credentials, cache_discovery=False).spreadsheets()
+        resource = build("sheets", "v4", credentials=credentials, cache_discovery=False).spreadsheets()
+        resource._http = CountingHttp(resource._http, metrics, "sheets")
+        return resource
 
     def gmail_builder():
         credentials = Credentials(
@@ -156,7 +163,9 @@ def build_clients():
             scopes=["https://www.googleapis.com/auth/gmail.modify"],
         )
         credentials.refresh(Request())
-        return build("gmail", "v1", credentials=credentials, cache_discovery=False).users()
+        resource = build("gmail", "v1", credentials=credentials, cache_discovery=False).users()
+        resource._http = CountingHttp(resource._http, metrics, "gmail")
+        return resource
 
     def subscriber_builder():
         from google.cloud import pubsub_v1
@@ -228,7 +237,9 @@ def main():
         if missing:
             raise RuntimeError("Missing event-sync environment variables: " + ", ".join(missing))
 
-        sheets, gmail, subscriber = build_clients()
+        global RUNTIME_METRICS
+        RUNTIME_METRICS = RuntimeMetrics()
+        sheets, gmail, subscriber = build_clients(RUNTIME_METRICS)
         sheet_id = os.environ["GOOGLE_SHEET_ID"]
         state_store = SheetState(sheets, sheet_id)
         config_rows, _ = refresh_config(sheets, sheet_id, state_store)
@@ -301,6 +312,13 @@ def main():
                         f"status={'ok' if success else 'failed'} duration={time.monotonic() - started:.1f}s",
                         flush=True,
                     )
+                    RUNTIME_METRICS.record_trigger(
+                        "+".join(sorted(triggers)),
+                        duration=time.monotonic() - started,
+                        success=success,
+                        changed_threads=runtime.last_changed_threads,
+                    )
+                    print("event_metrics=" + json.dumps(RUNTIME_METRICS.snapshot(), sort_keys=True), flush=True)
 
                 wake_event.wait(timeout=min(60.0, schedule.seconds_until_next(time.monotonic())))
         finally:

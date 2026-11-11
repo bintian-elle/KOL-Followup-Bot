@@ -97,6 +97,12 @@ per day. Pub/Sub notifications only wake the worker; `history.list` remains the
 source of truth, so duplicate or lost notifications are safe. An expired
 history cursor automatically triggers a complete reconciliation.
 
+Each processed batch writes an `event_metrics` JSON log containing process
+uptime, resident memory, Gmail/Sheets requests made by the long-lived runtime,
+compatibility worker launches, trigger counts, failures, affected threads, and
+processing time. Use these lines together with `systemd-cgtop` or `systemctl
+status` to compare idle and changed-mail behavior before and after migration.
+
 ## Runtime state
 
 Delivery receipts, the committed Gmail history cursor, Watch expiration,
