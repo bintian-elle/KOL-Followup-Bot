@@ -93,6 +93,16 @@ class RuntimeSchedule:
             self.next_maintenance,
         ) - now)
 
+    def retry(self, trigger, now, delay=5 * 60):
+        field = {
+            "full_reconciliation": "next_full_reconciliation",
+            "history_catchup": "next_history_catchup",
+            "config_refresh": "next_config_refresh",
+            "watch_renewal": "next_watch_renewal",
+            "maintenance": "next_maintenance",
+        }[trigger]
+        setattr(self, field, now + delay)
+
 
 def run_script(name):
     if RUNTIME_METRICS is not None:
@@ -300,7 +310,10 @@ def main():
                         if "watch_renewal" in triggers:
                             runtime.renew_watch(topic_name)
                         if "full_reconciliation" in triggers:
-                            success = runtime.full_reconcile("scheduled_or_config_full") and success
+                            full_success = runtime.full_reconcile("scheduled_or_config_full")
+                            success = full_success and success
+                            if not full_success:
+                                schedule.retry("full_reconciliation", time.monotonic())
                         if triggers & {"startup", "notification", "history_catchup"}:
                             success = runtime.sync_history("+".join(sorted(triggers))) and success
                         if "maintenance" in triggers and "full_reconciliation" not in triggers:

@@ -36,6 +36,13 @@ class RuntimeScheduleTests(unittest.TestCase):
 
         self.assertEqual(500.0 + 60 * 60, schedule.next_full_reconciliation)
 
+    def test_failed_full_reconciliation_is_retried_in_five_minutes(self):
+        schedule = run_bot.RuntimeSchedule.started_at(0.0)
+
+        schedule.retry("full_reconciliation", now=100.0)
+
+        self.assertEqual(400.0, schedule.next_full_reconciliation)
+
 
 class RuntimePrimitiveTests(unittest.TestCase):
     def test_trigger_queue_coalesces_duplicates_and_serializes_new_work(self):

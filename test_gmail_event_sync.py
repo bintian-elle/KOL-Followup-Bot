@@ -6,6 +6,7 @@ from googleapiclient.errors import HttpError
 from gmail_event_sync import (
     EventRuntime,
     HistoryCursorExpired,
+    PubSubInbox,
     TriggerQueue,
     collect_history,
     decode_notification,
@@ -120,6 +121,22 @@ class HistoryCollectionTests(unittest.TestCase):
 
 
 class NotificationTests(unittest.TestCase):
+    def test_inbox_coalesces_multiple_notifications_into_one_state_write(self):
+        events = []
+        state = FakeState(events=events)
+        queue = TriggerQueue()
+        inbox = PubSubInbox()
+        inbox.callback(FakeMessage("pub-1", b'{"emailAddress":"kol@elle-media.com","historyId":"44"}', events))
+        inbox.callback(FakeMessage("pub-2", b'{"emailAddress":"kol@elle-media.com","historyId":"46"}', events))
+
+        self.assertEqual(2, inbox.drain(state, queue, "kol@elle-media.com"))
+
+        self.assertEqual(1, events.count(("save", "gmail_watch")))
+        self.assertEqual({"notification"}, queue.begin())
+        self.assertEqual("46", state.values["gmail_watch"]["latest_notification_history_id"])
+        self.assertIn(("ack", "pub-1"), events)
+        self.assertIn(("ack", "pub-2"), events)
+
     def test_duplicate_pubsub_message_id_is_ignored_with_bounded_receipts(self):
         accepted, receipts = dedupe_notification_ids(["old", "same"], "same", limit=3)
         self.assertFalse(accepted)
@@ -152,7 +169,7 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual({"notification"}, queue.begin())
         self.assertEqual("44", state.values["gmail_watch"]["latest_notification_history_id"])
 
-    def test_duplicate_notification_is_acked_without_queueing(self):
+    def test_duplicate_notification_still_wakes_history_recovery(self):
         events = []
         state = FakeState({"gmail_watch": {"notification_ids": ["pub-1"]}}, events)
         queue = TriggerQueue()
@@ -161,7 +178,7 @@ class NotificationTests(unittest.TestCase):
         self.assertFalse(handle_pubsub_message(message, state, queue, "kol@elle-media.com"))
 
         self.assertEqual([("ack", "pub-1")], events)
-        self.assertIsNone(queue.begin())
+        self.assertEqual({"notification"}, queue.begin())
 
     def test_invalid_notification_is_acked_as_poison_message(self):
         events = []

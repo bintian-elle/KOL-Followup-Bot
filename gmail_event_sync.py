@@ -81,16 +81,49 @@ class PubSubInbox:
         self.wake_event.set()
 
     def drain(self, state_store, trigger_queue, expected_email):
-        accepted = 0
+        self.wake_event.clear()
+        pending = []
         while True:
             try:
-                message = self.messages.get_nowait()
+                pending.append(self.messages.get_nowait())
             except queue.Empty:
                 break
-            accepted += bool(handle_pubsub_message(
-                message, state_store, trigger_queue, expected_email,
-            ))
-        self.wake_event.clear()
+        if not pending:
+            return 0
+
+        watch_state = state_store.load("gmail_watch", {}) or {}
+        receipts = list(watch_state.get("notification_ids", []))
+        valid = []
+        accepted = 0
+        latest_history_id = watch_state.get("latest_notification_history_id")
+        for message in pending:
+            try:
+                payload = decode_pubsub_data(message.data)
+                if (not payload.get("historyId")
+                        or payload.get("emailAddress", "").casefold() != expected_email.casefold()):
+                    message.ack()
+                    continue
+            except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+                message.ack()
+                continue
+            is_new, receipts = dedupe_notification_ids(receipts, message.message_id)
+            accepted += int(is_new)
+            candidate = str(payload["historyId"])
+            if latest_history_id is None or int(candidate) > int(latest_history_id):
+                latest_history_id = candidate
+            valid.append(message)
+
+        if valid:
+            if accepted:
+                watch_state.update({
+                    "notification_ids": receipts,
+                    "latest_notification_history_id": latest_history_id,
+                    "last_notification_at": datetime.now(timezone.utc).isoformat(),
+                })
+                state_store.save("gmail_watch", watch_state)
+            trigger_queue.enqueue("notification")
+            for message in valid:
+                message.ack()
         return accepted
 
 
@@ -214,6 +247,7 @@ def handle_pubsub_message(message, state_store, trigger_queue, expected_email):
         watch_state.get("notification_ids", []), message.message_id,
     )
     if not accepted:
+        trigger_queue.enqueue("notification")
         message.ack()
         return False
     watch_state.update({
