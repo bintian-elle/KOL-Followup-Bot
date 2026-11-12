@@ -45,6 +45,15 @@ class RuntimeScheduleTests(unittest.TestCase):
 
 
 class RuntimePrimitiveTests(unittest.TestCase):
+    def test_health_alerts_use_dedicated_recipient_then_pilot_recipient(self):
+        self.assertEqual("U-ERROR", run_bot.health_alert_recipient({
+            "error_notification_slack_id": "U-ERROR",
+            "pilot_recipient_slack_id": "U-PILOT",
+        }))
+        self.assertEqual("U-PILOT", run_bot.health_alert_recipient({
+            "pilot_recipient_slack_id": "U-PILOT",
+        }))
+
     def test_trigger_queue_coalesces_duplicates_and_serializes_new_work(self):
         queue = TriggerQueue()
         queue.enqueue("notification")

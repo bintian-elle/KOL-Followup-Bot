@@ -17,11 +17,12 @@ from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-from assign_active import load_env
+from assign_active import cell, load_env, slack_call, truth
 from gmail_event_sync import (ClientRegistry, EventRuntime, PubSubInbox, TriggerQueue,
                               config_fingerprint, subscriber_needs_restart)
 from event_sync_metrics import CountingHttp, RuntimeMetrics
 from runtime_config import load_config_rows
+from runtime_alerts import RuntimeAlerter
 from sheet_state import SheetState
 
 
@@ -33,6 +34,36 @@ CONFIG_REFRESH_SECONDS = 2 * 60 * 60
 WATCH_RENEWAL_SECONDS = 24 * 60 * 60
 MAINTENANCE_SECONDS = 5 * 60
 RUNTIME_METRICS = None
+
+
+def health_alert_recipient(settings, config_rows=()):
+    developer = next((row for row in config_rows if cell(row, 0) == "Testing developer"), None)
+    if developer and truth(cell(developer, 2)):
+        return cell(developer, 3)
+    return (settings.get("error_notification_slack_id", "").strip()
+            or settings.get("pilot_recipient_slack_id", "").strip())
+
+
+def build_runtime_alerter(settings, config_rows):
+    token = os.environ.get("SLACK_BOT_TOKEN", "").strip()
+    recipient = health_alert_recipient(settings, config_rows)
+    if not token or not recipient:
+        return None
+
+    def send_text(text):
+        channel = slack_call(token, "conversations.open", {"users": recipient})["channel"]["id"]
+        slack_call(token, "chat.postMessage", {"channel": channel, "text": text})
+
+    return RuntimeAlerter(token, recipient, send_text)
+
+
+def safe_health_alert(alerter, method, *args):
+    if alerter is None:
+        return
+    try:
+        getattr(alerter, method)(*args)
+    except Exception as exc:
+        print(f"Slack health alert failed: {exc}", flush=True)
 
 
 def _advance(deadline, interval, now):
@@ -254,6 +285,7 @@ def main():
         state_store = SheetState(sheets, sheet_id)
         config_rows, _ = refresh_config(sheets, sheet_id, state_store)
         settings = _settings(config_rows)
+        health_alerter = build_runtime_alerter(settings, config_rows)
         expected_email = settings["gmail_mailbox"].strip()
         topic_name = os.environ["GMAIL_PUBSUB_TOPIC"]
         subscription_name = os.environ["GMAIL_PUBSUB_SUBSCRIPTION"]
@@ -304,6 +336,7 @@ def main():
                         if "config_refresh" in triggers:
                             config_rows, config_changed = refresh_config(sheets, sheet_id, state_store)
                             settings = _settings(config_rows)
+                            health_alerter = build_runtime_alerter(settings, config_rows)
                             expected_email = settings["gmail_mailbox"].strip()
                             if config_changed:
                                 triggers.add("full_reconciliation")
@@ -332,8 +365,21 @@ def main():
                         changed_threads=runtime.last_changed_threads,
                     )
                     print("event_metrics=" + json.dumps(RUNTIME_METRICS.snapshot(), sort_keys=True), flush=True)
+                    if success:
+                        safe_health_alert(health_alerter, "recovered")
+                    else:
+                        safe_health_alert(
+                            health_alerter, "failure", "business synchronization",
+                            "One or more Gmail, Sheet, assignment, reminder, or digest workers failed.",
+                        )
 
                 wake_event.wait(timeout=min(60.0, schedule.seconds_until_next(time.monotonic())))
+        except Exception as exc:
+            safe_health_alert(
+                health_alerter, "failure", "service",
+                f"{type(exc).__name__}: {exc}",
+            )
+            raise
         finally:
             if subscriber_future is not None:
                 subscriber_future.cancel()
