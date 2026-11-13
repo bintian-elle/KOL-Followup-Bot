@@ -1,6 +1,7 @@
 """Lightweight runtime counters for event-sync acceptance and health logs."""
 
 import resource
+import ssl
 import threading
 import time
 from collections import Counter, defaultdict
@@ -58,14 +59,36 @@ class RuntimeMetrics:
 
 
 class CountingHttp:
-    def __init__(self, delegate, metrics, service):
+    def __init__(self, delegate, metrics, service, attempts=3, sleeper=time.sleep):
         self.delegate = delegate
         self.metrics = metrics
         self.service = service
+        self.attempts = attempts
+        self.sleeper = sleeper
+
+    def _discard_connections(self):
+        transport = getattr(self.delegate, "http", self.delegate)
+        connections = getattr(transport, "connections", None)
+        if connections is not None:
+            for connection in list(connections.values()):
+                close = getattr(connection, "close", None)
+                if close:
+                    try:
+                        close()
+                    except OSError:
+                        pass
+            connections.clear()
 
     def request(self, *args, **kwargs):
-        self.metrics.record_api(self.service)
-        return self.delegate.request(*args, **kwargs)
+        for attempt in range(self.attempts):
+            self.metrics.record_api(self.service)
+            try:
+                return self.delegate.request(*args, **kwargs)
+            except (ssl.SSLError, ConnectionError, TimeoutError, OSError):
+                self._discard_connections()
+                if attempt == self.attempts - 1:
+                    raise
+                self.sleeper(2 ** attempt)
 
     def __getattr__(self, name):
         return getattr(self.delegate, name)

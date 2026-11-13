@@ -1,4 +1,5 @@
 import unittest
+import ssl
 
 from event_sync_metrics import CountingHttp, RuntimeMetrics
 
@@ -9,6 +10,18 @@ class FakeHttp:
 
     def request(self, uri, method="GET", **kwargs):
         self.calls.append((uri, method, kwargs))
+        return "response", b"body"
+
+
+class FlakyHttp:
+    def __init__(self):
+        self.calls = 0
+        self.http = type("ConnectionPool", (), {"connections": {"stale": object()}})()
+
+    def request(self, *args, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            raise ssl.SSLEOFError("stale TLS connection")
         return "response", b"body"
 
 
@@ -42,6 +55,20 @@ class RuntimeMetricsTests(unittest.TestCase):
         self.assertEqual(("response", b"body"), result)
         self.assertEqual({"gmail": 1}, metrics.snapshot()["api_requests"])
         self.assertEqual(1, len(delegate.calls))
+
+    def test_transient_ssl_eof_discards_stale_connection_and_retries(self):
+        metrics = RuntimeMetrics(clock=lambda: 1.0, memory_probe=lambda: 0.0)
+        delegate = FlakyHttp()
+        sleeps = []
+        http = CountingHttp(delegate, metrics, "sheets", sleeper=sleeps.append)
+
+        result = http.request("https://sheets.googleapis.com/test")
+
+        self.assertEqual(("response", b"body"), result)
+        self.assertEqual(2, delegate.calls)
+        self.assertEqual({}, delegate.http.connections)
+        self.assertEqual([1], sleeps)
+        self.assertEqual({"sheets": 2}, metrics.snapshot()["api_requests"])
 
 
 if __name__ == "__main__":

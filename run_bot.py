@@ -38,10 +38,8 @@ RUNTIME_METRICS = None
 
 def health_alert_recipient(settings, config_rows=()):
     developer = next((row for row in config_rows if cell(row, 0) == "Testing developer"), None)
-    if developer and truth(cell(developer, 2)):
-        return cell(developer, 3)
     return (settings.get("error_notification_slack_id", "").strip()
-            or settings.get("pilot_recipient_slack_id", "").strip())
+            or (cell(developer, 3) if developer else ""))
 
 
 def build_runtime_alerter(settings, config_rows):
