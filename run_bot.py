@@ -44,6 +44,7 @@ class EventWorkPlan:
     review: bool
     mail: bool
     active: bool
+    thread_ids: tuple
 
 
 def event_work_plan(batch, active_label_ids, review_label_id, closed_label_ids):
@@ -58,6 +59,7 @@ def event_work_plan(batch, active_label_ids, review_label_id, closed_label_ids):
         review=bool(changed_labels & (active_label_ids | {review_label_id})),
         mail=bool(batch.messages_added),
         active=message_change or bool(changed_labels & active_label_ids),
+        thread_ids=tuple(sorted(batch.thread_ids)),
     )
 
 
@@ -160,11 +162,11 @@ class RuntimeSchedule:
         setattr(self, field, now + delay)
 
 
-def run_script(name):
+def run_script(name, *args):
     if RUNTIME_METRICS is not None:
         RUNTIME_METRICS.record_worker(name)
     process = subprocess.Popen(
-        [sys.executable, str(ROOT / name)], cwd=ROOT,
+        [sys.executable, str(ROOT / name), *args], cwd=ROOT,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1,
     )
@@ -187,7 +189,10 @@ def compatibility_pipeline(plan=None):
     route_result = run_script("route_reach_out_replies.py") if full or plan.mail else 0
     reach_result = run_script("sync_reach_out.py") if (full or plan.mail) and not route_result else int(bool(route_result))
     needs_result = run_script("sync_needs_review.py") if (full or plan.mail) and not monitor_result else int(bool(monitor_result))
-    active_result = run_script("sync_active_label.py") if full or plan.active else 0
+    active_args = () if full else tuple(
+        argument for thread_id in plan.thread_ids for argument in ("--thread-id", thread_id)
+    )
+    active_result = run_script("sync_active_label.py", *active_args) if full or plan.active else 0
     if (full or plan.active) and active_result == 0:
         assignment_result = run_script("assign_active.py")
     else:

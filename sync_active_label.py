@@ -3,6 +3,7 @@
 This utility only reads Gmail and writes Google Sheets. It never calls Slack.
 """
 
+import argparse
 import os
 import warnings
 from datetime import datetime
@@ -14,6 +15,7 @@ from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from gmail_active_labels import resolve_active_labels
 from runtime_config import load_config_rows
@@ -21,6 +23,15 @@ from runtime_config import load_config_rows
 
 ROOT = Path(__file__).resolve().parent
 TRACK = "Bluevua_KOL_Active_Track"
+
+
+def merge_track_rows(existing_rows, updated_by_thread, removed_thread_ids):
+    """Merge a small Gmail event batch into the existing Track and keep reply order."""
+    by_thread = {row[0]: list(row) for row in existing_rows if row and row[0]}
+    for thread_id in removed_thread_ids:
+        by_thread.pop(thread_id, None)
+    by_thread.update(updated_by_thread)
+    return sorted(by_thread.values(), key=lambda row: row[2] if len(row) > 2 else "", reverse=True)
 
 
 def owner_assignment(old_owner, old_assigned_at, child_owners, now):
@@ -41,6 +52,9 @@ def load_env():
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--thread-id", action="append", default=[], help="sync only this changed Gmail thread")
+    args = parser.parse_args()
     load_env()
     sheet_id = os.environ["GOOGLE_SHEET_ID"]
     service_file = ROOT / os.environ["GOOGLE_SERVICE_ACCOUNT_FILE"]
@@ -74,28 +88,47 @@ def main():
     by_thread = {row[0]: row for row in existing[1:] if row and row[0]}
     messages = []
     owners_by_thread = {}
-    for label_id in active["active_ids"]:
-        page_token = None
-        while True:
-            page = gmail.messages().list(userId="me", labelIds=[label_id], maxResults=500, pageToken=page_token).execute()
-            batch = page.get("messages", [])
-            messages.extend(batch)
-            owner = active["owner_by_label_id"][label_id]
-            if owner:
-                for item in batch:
-                    owners_by_thread.setdefault(item["threadId"], set()).add(owner)
-            page_token = page.get("nextPageToken")
-            if not page_token:
-                break
+    incremental = bool(args.thread_id)
+    if incremental:
+        thread_ids = list(dict.fromkeys(args.thread_id))
+    else:
+        for label_id in active["active_ids"]:
+            page_token = None
+            while True:
+                page = gmail.messages().list(userId="me", labelIds=[label_id], maxResults=500, pageToken=page_token).execute()
+                batch = page.get("messages", [])
+                messages.extend(batch)
+                owner = active["owner_by_label_id"][label_id]
+                if owner:
+                    for item in batch:
+                        owners_by_thread.setdefault(item["threadId"], set()).add(owner)
+                page_token = page.get("nextPageToken")
+                if not page_token:
+                    break
+        thread_ids = list(dict.fromkeys(item["threadId"] for item in messages))
 
     rows = []
+    updated_by_thread = {}
+    removed_thread_ids = set()
     manual_owner_changes = []
     owner_conflicts = []
-    for thread_id in dict.fromkeys(item["threadId"] for item in messages):
-        thread = gmail.threads().get(
-            userId="me", id=thread_id, format="metadata",
-            metadataHeaders=["From", "To", "Cc", "Subject"],
-        ).execute()
+    for thread_id in thread_ids:
+        try:
+            thread = gmail.threads().get(
+                userId="me", id=thread_id, format="metadata",
+                metadataHeaders=["From", "To", "Cc", "Subject"],
+            ).execute()
+        except HttpError as exc:
+            if incremental and exc.resp.status == 404:
+                removed_thread_ids.add(thread_id)
+                continue
+            raise
+        current_label_ids = {
+            label_id for message in thread["messages"] for label_id in message.get("labelIds", [])
+        }
+        if incremental and not (current_label_ids & set(active["active_ids"])):
+            removed_thread_ids.add(thread_id)
+            continue
         conversation = sorted(thread["messages"], key=lambda msg: int(msg["internalDate"]))
         parsed = []
         for message in conversation:
@@ -125,7 +158,14 @@ def main():
         old = by_thread.get(thread_id, [])
         def old_value(index):
             return old[index] if len(old) > index else ""
-        child_owners = owners_by_thread.get(thread_id, set())
+        if incremental:
+            child_owners = {
+                active["owner_by_label_id"][label_id]
+                for label_id in current_label_ids & set(active["active_ids"])
+                if active["owner_by_label_id"][label_id]
+            }
+        else:
+            child_owners = owners_by_thread.get(thread_id, set())
         now_text = datetime.now(timezone).strftime("%Y-%m-%d %H:%M:%S %Z")
         owner, assigned_at = owner_assignment(old_value(8), old_value(9), child_owners, now_text)
         if len(child_owners) > 1:
@@ -142,10 +182,13 @@ def main():
         ]
         # Threads without an inbound reply belong after all dated replies.
         rows.append((int(inbound[-1][0]["internalDate"]) if inbound else -1, row))
+        updated_by_thread[thread_id] = row
     rows.sort(key=lambda value: value[0], reverse=True)
+    final_rows = (merge_track_rows(existing[1:], updated_by_thread, removed_thread_ids)
+                  if incremental else [row for _, row in rows])
     # Rewrite complete rows so owner assignments stay attached to their thread.
     old_count = max(0, len(existing) - 1)
-    values = [row for _, row in rows] + [[""] * 12 for _ in range(max(0, old_count - len(rows)))]
+    values = final_rows + [[""] * 12 for _ in range(max(0, old_count - len(final_rows)))]
     if values:
         sheets.values().update(
             spreadsheetId=sheet_id, range=f"'{TRACK}'!A2:L{len(values) + 1}",
@@ -155,7 +198,9 @@ def main():
         print(f"Member label override: {thread_id}: {prior or 'Unassigned'} -> {owner}", flush=True)
     for thread_id, owners in owner_conflicts:
         print(f"Member label conflict: {thread_id}: {', '.join(owners)}; kept existing owner", flush=True)
-    print(f"Active label family: {label_name}; labeled messages: {len(messages)}; Track conversations: {len(rows)}")
+    mode = "incremental" if incremental else "full"
+    print(f"Active label family: {label_name}; mode: {mode}; checked threads: {len(thread_ids)}; "
+          f"labeled messages: {len(messages)}; Track conversations: {len(final_rows)}")
 
 
 if __name__ == "__main__":

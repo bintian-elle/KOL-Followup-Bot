@@ -127,6 +127,12 @@ class PipelineTests(unittest.TestCase):
             "sync_active_label.py",
             "assign_active.py",
         ], [call.args[0] for call in run_script.call_args_list])
+        active_call = next(call for call in run_script.call_args_list
+                           if call.args[0] == "sync_active_label.py")
+        self.assertEqual(
+            ("sync_active_label.py", "--thread-id", "t1"),
+            active_call.args,
+        )
 
     @patch("run_bot.run_script", return_value=0)
     def test_review_label_change_runs_only_review_monitor(self, run_script):
