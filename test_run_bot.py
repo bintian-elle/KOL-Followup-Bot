@@ -119,7 +119,6 @@ class PipelineTests(unittest.TestCase):
             frozenset({"m1"}), frozenset(), {}, {},
         )
         plan = run_bot.event_work_plan(batch, {"ACTIVE"}, "REVIEW", {"CLOSED"})
-
         self.assertTrue(run_bot.compatibility_pipeline(plan))
         self.assertEqual([
             "route_reach_out_replies.py",
@@ -136,7 +135,6 @@ class PipelineTests(unittest.TestCase):
             frozenset(), frozenset(), {"m1": frozenset({"REVIEW"})}, {},
         )
         plan = run_bot.event_work_plan(batch, {"ACTIVE"}, "REVIEW", {"CLOSED"})
-
         self.assertTrue(run_bot.compatibility_pipeline(plan))
         self.assertEqual(
             ["monitor_needs_review.py"],
@@ -150,7 +148,6 @@ class PipelineTests(unittest.TestCase):
             frozenset(), frozenset(), {"m1": frozenset({"UNRELATED"})}, {},
         )
         plan = run_bot.event_work_plan(batch, {"ACTIVE"}, "REVIEW", {"CLOSED"})
-
         self.assertTrue(run_bot.compatibility_pipeline(plan))
         run_script.assert_not_called()
 

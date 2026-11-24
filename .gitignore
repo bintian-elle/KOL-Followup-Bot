@@ -18,6 +18,9 @@ credentials/
 .reach-out-replies.json
 .slack-command-state.json
 .slack-home-state.json
+.ringconn-followup.json
+.ringconn-followup.tmp
+.ringconn-alert-state.json*
 .venv/
 __pycache__/
 .pytest_cache/

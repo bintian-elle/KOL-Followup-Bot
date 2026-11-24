@@ -24,6 +24,7 @@ from gmail_event_sync import (ClientRegistry, EventRuntime, PubSubInbox, Trigger
 from event_sync_metrics import CountingHttp, RuntimeMetrics
 from runtime_config import load_config_rows
 from runtime_alerts import RuntimeAlerter
+from ringconn_followup import MAILBOX as RINGCONN_MAILBOX, STATE_PATH as RINGCONN_STATE_PATH, RingConnFollowup
 from sheet_state import SheetState
 
 
@@ -66,9 +67,9 @@ def health_alert_recipient(settings, config_rows=()):
             or (cell(developer, 3) if developer else ""))
 
 
-def build_runtime_alerter(settings, config_rows):
+def build_runtime_alerter(settings, config_rows, *, recipient=None, state_path=None):
     token = os.environ.get("SLACK_BOT_TOKEN", "").strip()
-    recipient = health_alert_recipient(settings, config_rows)
+    recipient = recipient or health_alert_recipient(settings, config_rows)
     if not token or not recipient:
         return None
 
@@ -76,6 +77,8 @@ def build_runtime_alerter(settings, config_rows):
         channel = slack_call(token, "conversations.open", {"users": recipient})["channel"]["id"]
         slack_call(token, "chat.postMessage", {"channel": channel, "text": text})
 
+    if state_path is not None:
+        return RuntimeAlerter(token, recipient, send_text, state_path=state_path)
     return RuntimeAlerter(token, recipient, send_text)
 
 
@@ -319,6 +322,21 @@ def main():
         trigger_queue = TriggerQueue()
         wake_event = threading.Event()
         inbox = PubSubInbox(wake_event)
+        ringconn = None
+        if expected_email.casefold() == RINGCONN_MAILBOX and RINGCONN_STATE_PATH.is_file():
+            ringconn_alerter = build_runtime_alerter(
+                settings, config_rows, recipient="U0BN7GWSX0S",
+                state_path=ROOT / ".ringconn-alert-state.json",
+            )
+            ringconn = RingConnFollowup(
+                sheets, gmail, os.environ["SLACK_BOT_TOKEN"],
+                on_health=lambda *args: safe_health_alert(ringconn_alerter, *args),
+            )
+
+        def on_full_reconcile():
+            mark_full_reconciliation(state_store)
+            if ringconn:
+                ringconn.dirty = True
         event_labels = {}
         pending_plan = [None]
 
@@ -343,6 +361,8 @@ def main():
                 }, sort_keys=True),
                 flush=True,
             )
+            if ringconn:
+                ringconn.on_history(batch)
 
         def event_pipeline():
             plan = pending_plan[0]
@@ -352,13 +372,14 @@ def main():
         refresh_event_labels()
         runtime = EventRuntime(
             gmail, state_store, event_pipeline,
-            on_full_reconcile=lambda: mark_full_reconciliation(state_store),
+            on_full_reconcile=on_full_reconcile,
             on_history=on_history,
         )
         runtime_state = state_store.load("gmail_event_runtime", {}) or {}
         schedule = RuntimeSchedule.restored_at(time.monotonic(), time.time(), runtime_state)
         socket_process = None
         subscriber_future = None
+        retrying = set()
         try:
             run_script("publish_slack_home.py")
             socket_process = _start_slack_socket()
@@ -369,6 +390,8 @@ def main():
 
             while True:
                 inbox.drain(state_store, trigger_queue, expected_email)
+                if ringconn:
+                    ringconn.tick()
                 now = time.monotonic()
                 for trigger in schedule.take_due(now):
                     trigger_queue.enqueue(trigger)
@@ -389,7 +412,7 @@ def main():
                 triggers = trigger_queue.begin()
                 if triggers:
                     started = time.monotonic()
-                    success = True
+                    failed = set()
                     try:
                         if "config_refresh" in triggers:
                             config_rows, config_changed = refresh_config(sheets, sheet_id, state_store)
@@ -403,15 +426,26 @@ def main():
                             runtime.renew_watch(topic_name)
                         if "full_reconciliation" in triggers:
                             full_success = runtime.full_reconcile("scheduled_or_config_full")
-                            success = full_success and success
                             if not full_success:
-                                schedule.retry("full_reconciliation", time.monotonic())
+                                failed.add("full_reconciliation")
                         if triggers & {"startup", "notification", "history_catchup"}:
-                            success = runtime.sync_history("+".join(sorted(triggers))) and success
+                            if not runtime.sync_history("+".join(sorted(triggers))):
+                                failed.add("history_catchup")
+                            else:
+                                retrying.discard("history_catchup")
                         if "maintenance" in triggers and "full_reconciliation" not in triggers:
-                            success = time_maintenance() and success
+                            if not time_maintenance():
+                                failed.add("maintenance")
                     finally:
                         trigger_queue.finish()
+                    completed = triggers - failed
+                    if "full_reconciliation" in failed:
+                        completed.discard("maintenance")
+                    retrying.difference_update(completed)
+                    retrying.update(failed)
+                    for trigger in failed:
+                        schedule.retry(trigger, time.monotonic(), delay=60)
+                    success = not failed
                     print(
                         f"{datetime.now(timezone.utc).isoformat()} triggers={','.join(sorted(triggers))} "
                         f"status={'ok' if success else 'failed'} duration={time.monotonic() - started:.1f}s",
@@ -424,15 +458,16 @@ def main():
                         changed_threads=runtime.last_changed_threads,
                     )
                     print("event_metrics=" + json.dumps(RUNTIME_METRICS.snapshot(), sort_keys=True), flush=True)
-                    if success:
+                    if not retrying:
                         safe_health_alert(health_alerter, "recovered")
-                    else:
+                    elif failed:
                         safe_health_alert(
                             health_alerter, "failure", "business synchronization",
                             "One or more Gmail, Sheet, assignment, reminder, or digest workers failed.",
                         )
 
-                wake_event.wait(timeout=min(60.0, schedule.seconds_until_next(time.monotonic())))
+                wake_limit = 15.0 if ringconn else 60.0
+                wake_event.wait(timeout=min(wake_limit, schedule.seconds_until_next(time.monotonic())))
         except Exception as exc:
             safe_health_alert(
                 health_alerter, "failure", "service",
