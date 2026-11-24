@@ -146,6 +146,8 @@ class HistoryBatch:
     end_history_id: str
     message_ids: FrozenSet[str]
     thread_ids: FrozenSet[str]
+    messages_added: FrozenSet[str]
+    messages_deleted: FrozenSet[str]
     labels_added: Dict[str, FrozenSet[str]]
     labels_removed: Dict[str, FrozenSet[str]]
 
@@ -167,6 +169,8 @@ def collect_history(gmail, start_history_id):
     """Drain every Gmail history page after start_history_id into one batch."""
     message_ids = set()
     thread_ids = set()
+    messages_added = set()
+    messages_deleted = set()
     labels_added = {}
     labels_removed = {}
     page_token = None
@@ -186,9 +190,15 @@ def collect_history(gmail, start_history_id):
         end_history_id = str(page.get("historyId", end_history_id))
         for record in page.get("history", []):
             for item in record.get("messagesAdded", []):
-                _remember_message(item.get("message", {}), message_ids, thread_ids)
+                message = item.get("message", {})
+                _remember_message(message, message_ids, thread_ids)
+                if message.get("id"):
+                    messages_added.add(message["id"])
             for item in record.get("messagesDeleted", []):
-                _remember_message(item.get("message", {}), message_ids, thread_ids)
+                message = item.get("message", {})
+                _remember_message(message, message_ids, thread_ids)
+                if message.get("id"):
+                    messages_deleted.add(message["id"])
             for field, destination in (("labelsAdded", labels_added), ("labelsRemoved", labels_removed)):
                 for item in record.get(field, []):
                     message = item.get("message", {})
@@ -204,6 +214,8 @@ def collect_history(gmail, start_history_id):
         end_history_id=end_history_id,
         message_ids=frozenset(message_ids),
         thread_ids=frozenset(thread_ids),
+        messages_added=frozenset(messages_added),
+        messages_deleted=frozenset(messages_deleted),
         labels_added={key: frozenset(value) for key, value in labels_added.items()},
         labels_removed={key: frozenset(value) for key, value in labels_removed.items()},
     )
@@ -268,11 +280,12 @@ def subscriber_needs_restart(future):
 class EventRuntime:
     """Own the durable Gmail cursor and serialize business pipeline commits."""
 
-    def __init__(self, gmail, state_store, pipeline, on_full_reconcile=None):
+    def __init__(self, gmail, state_store, pipeline, on_full_reconcile=None, on_history=None):
         self.gmail = gmail
         self.state_store = state_store
         self.pipeline = pipeline
         self.on_full_reconcile = on_full_reconcile or (lambda: None)
+        self.on_history = on_history or (lambda batch: None)
         self.last_changed_threads = 0
 
     def _commit_cursor(self, history_id, trigger, changed):
@@ -302,6 +315,8 @@ class EventRuntime:
         except HistoryCursorExpired:
             return self._full_recovery("history_cursor_expired")
         self.last_changed_threads = len(batch.thread_ids)
+        if batch.changed:
+            self.on_history(batch)
         if batch.changed and not self.pipeline():
             return False
         self._commit_cursor(batch.end_history_id, trigger, batch.changed)

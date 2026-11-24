@@ -18,6 +18,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 from assign_active import cell, load_env, slack_call, truth
+from gmail_active_labels import resolve_active_labels, resolve_closed_labels
 from gmail_event_sync import (ClientRegistry, EventRuntime, PubSubInbox, TriggerQueue,
                               config_fingerprint, subscriber_needs_restart)
 from event_sync_metrics import CountingHttp, RuntimeMetrics
@@ -34,6 +35,29 @@ CONFIG_REFRESH_SECONDS = 2 * 60 * 60
 WATCH_RENEWAL_SECONDS = 24 * 60 * 60
 MAINTENANCE_SECONDS = 5 * 60
 RUNTIME_METRICS = None
+
+
+@dataclass(frozen=True)
+class EventWorkPlan:
+    closed: bool
+    review: bool
+    mail: bool
+    active: bool
+
+
+def event_work_plan(batch, active_label_ids, review_label_id, closed_label_ids):
+    changed_labels = set().union(
+        *(batch.labels_added.values()), *(batch.labels_removed.values()),
+    )
+    active_label_ids = set(active_label_ids)
+    closed_label_ids = set(closed_label_ids)
+    message_change = bool(batch.messages_added or batch.messages_deleted)
+    return EventWorkPlan(
+        closed=bool(changed_labels & closed_label_ids),
+        review=bool(changed_labels & (active_label_ids | {review_label_id})),
+        mail=bool(batch.messages_added),
+        active=message_change or bool(changed_labels & active_label_ids),
+    )
 
 
 def health_alert_recipient(settings, config_rows=()):
@@ -150,25 +174,29 @@ def run_script(name):
     return return_code
 
 
-def compatibility_pipeline():
+def compatibility_pipeline(plan=None):
     """Run the established business workers once, in their required order."""
-    closure_result = run_script("process_closed.py")
+    full = plan is None
+    closure_result = run_script("process_closed.py") if full or plan.closed else 0
     if closure_result:
         return False
-    monitor_result = run_script("monitor_needs_review.py")
-    route_result = run_script("route_reach_out_replies.py")
-    reach_result = run_script("sync_reach_out.py") if not route_result else 1
-    needs_result = run_script("sync_needs_review.py") if not monitor_result else 1
-    active_result = run_script("sync_active_label.py")
-    if active_result == 0:
+    monitor_result = run_script("monitor_needs_review.py") if full or plan.review else 0
+    route_result = run_script("route_reach_out_replies.py") if full or plan.mail else 0
+    reach_result = run_script("sync_reach_out.py") if (full or plan.mail) and not route_result else int(bool(route_result))
+    needs_result = run_script("sync_needs_review.py") if (full or plan.mail) and not monitor_result else int(bool(monitor_result))
+    active_result = run_script("sync_active_label.py") if full or plan.active else 0
+    if (full or plan.active) and active_result == 0:
         assignment_result = run_script("assign_active.py")
+    else:
+        assignment_result = int(bool(active_result))
+    if full and active_result == 0:
         reminder_result = run_script("remind_overdue.py")
     else:
-        assignment_result = reminder_result = 1
-    if not any((monitor_result, route_result, reach_result, needs_result, active_result)):
+        reminder_result = int(bool(active_result))
+    if full and not any((monitor_result, route_result, reach_result, needs_result, active_result)):
         digest_result = run_script("daily_digest.py")
     else:
-        digest_result = 1
+        digest_result = int(bool(monitor_result or route_result or reach_result or needs_result or active_result))
     return not any((monitor_result, route_result, reach_result, needs_result, active_result,
                     assignment_result, reminder_result, digest_result))
 
@@ -291,9 +319,41 @@ def main():
         trigger_queue = TriggerQueue()
         wake_event = threading.Event()
         inbox = PubSubInbox(wake_event)
+        event_labels = {}
+        pending_plan = [None]
+
+        def refresh_event_labels():
+            labels = gmail.labels().list(userId="me").execute().get("labels", [])
+            active = resolve_active_labels(labels, config_rows)
+            closed = resolve_closed_labels(labels, config_rows)
+            event_labels.update({
+                "active": set(active["active_ids"]),
+                "review": active["review_id"],
+                "closed": set(closed.values()),
+            })
+
+        def on_history(batch):
+            pending_plan[0] = event_work_plan(
+                batch, event_labels["active"], event_labels["review"], event_labels["closed"],
+            )
+            print(
+                "event_plan=" + json.dumps({
+                    "threads": len(batch.thread_ids),
+                    **pending_plan[0].__dict__,
+                }, sort_keys=True),
+                flush=True,
+            )
+
+        def event_pipeline():
+            plan = pending_plan[0]
+            pending_plan[0] = None
+            return compatibility_pipeline(plan)
+
+        refresh_event_labels()
         runtime = EventRuntime(
-            gmail, state_store, compatibility_pipeline,
+            gmail, state_store, event_pipeline,
             on_full_reconcile=lambda: mark_full_reconciliation(state_store),
+            on_history=on_history,
         )
         runtime_state = state_store.load("gmail_event_runtime", {}) or {}
         schedule = RuntimeSchedule.restored_at(time.monotonic(), time.time(), runtime_state)
@@ -337,6 +397,7 @@ def main():
                             health_alerter = build_runtime_alerter(settings, config_rows)
                             expected_email = settings["gmail_mailbox"].strip()
                             if config_changed:
+                                refresh_event_labels()
                                 triggers.add("full_reconciliation")
                         if "watch_renewal" in triggers:
                             runtime.renew_watch(topic_name)

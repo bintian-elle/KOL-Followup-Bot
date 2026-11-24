@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 import run_bot
-from gmail_event_sync import ClientRegistry, TriggerQueue, config_fingerprint
+from gmail_event_sync import ClientRegistry, HistoryBatch, TriggerQueue, config_fingerprint
 
 
 class RuntimeScheduleTests(unittest.TestCase):
@@ -111,6 +111,48 @@ class PipelineTests(unittest.TestCase):
             "remind_overdue.py",
             "daily_digest.py",
         ], [call.args[0] for call in run_script.call_args_list])
+
+    @patch("run_bot.run_script", return_value=0)
+    def test_new_message_runs_mail_and_active_work_but_not_timed_work(self, run_script):
+        batch = HistoryBatch(
+            "1", "2", frozenset({"m1"}), frozenset({"t1"}),
+            frozenset({"m1"}), frozenset(), {}, {},
+        )
+        plan = run_bot.event_work_plan(batch, {"ACTIVE"}, "REVIEW", {"CLOSED"})
+
+        self.assertTrue(run_bot.compatibility_pipeline(plan))
+        self.assertEqual([
+            "route_reach_out_replies.py",
+            "sync_reach_out.py",
+            "sync_needs_review.py",
+            "sync_active_label.py",
+            "assign_active.py",
+        ], [call.args[0] for call in run_script.call_args_list])
+
+    @patch("run_bot.run_script", return_value=0)
+    def test_review_label_change_runs_only_review_monitor(self, run_script):
+        batch = HistoryBatch(
+            "1", "2", frozenset({"m1"}), frozenset({"t1"}),
+            frozenset(), frozenset(), {"m1": frozenset({"REVIEW"})}, {},
+        )
+        plan = run_bot.event_work_plan(batch, {"ACTIVE"}, "REVIEW", {"CLOSED"})
+
+        self.assertTrue(run_bot.compatibility_pipeline(plan))
+        self.assertEqual(
+            ["monitor_needs_review.py"],
+            [call.args[0] for call in run_script.call_args_list],
+        )
+
+    @patch("run_bot.run_script", return_value=0)
+    def test_unrelated_label_change_runs_no_business_workers(self, run_script):
+        batch = HistoryBatch(
+            "1", "2", frozenset({"m1"}), frozenset({"t1"}),
+            frozenset(), frozenset(), {"m1": frozenset({"UNRELATED"})}, {},
+        )
+        plan = run_bot.event_work_plan(batch, {"ACTIVE"}, "REVIEW", {"CLOSED"})
+
+        self.assertTrue(run_bot.compatibility_pipeline(plan))
+        run_script.assert_not_called()
 
     @patch("run_bot.run_script", return_value=0)
     def test_time_maintenance_runs_without_full_reconciliation(self, run_script):

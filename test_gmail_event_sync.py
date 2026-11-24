@@ -87,6 +87,7 @@ class HistoryCollectionTests(unittest.TestCase):
             "p2": {
                 "history": [
                     {"id": "13", "labelsRemoved": [{"message": {"id": "m1", "threadId": "t1"}, "labelIds": ["L2"]}]},
+                    {"id": "13", "messagesDeleted": [{"message": {"id": "m3", "threadId": "t3"}}]},
                 ],
                 "historyId": "13",
             },
@@ -96,8 +97,10 @@ class HistoryCollectionTests(unittest.TestCase):
 
         self.assertEqual("10", batch.start_history_id)
         self.assertEqual("13", batch.end_history_id)
-        self.assertEqual(frozenset({"m1", "m2"}), batch.message_ids)
-        self.assertEqual(frozenset({"t1", "t2"}), batch.thread_ids)
+        self.assertEqual(frozenset({"m1", "m2", "m3"}), batch.message_ids)
+        self.assertEqual(frozenset({"t1", "t2", "t3"}), batch.thread_ids)
+        self.assertEqual(frozenset({"m1"}), batch.messages_added)
+        self.assertEqual(frozenset({"m3"}), batch.messages_deleted)
         self.assertEqual({"m2": frozenset({"L1"})}, batch.labels_added)
         self.assertEqual({"m1": frozenset({"L2"})}, batch.labels_removed)
         self.assertEqual([None, "p2"], [call.get("pageToken") for call in gmail.history_api.calls])
